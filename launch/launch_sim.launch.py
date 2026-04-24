@@ -1,13 +1,93 @@
 import os
+import shutil
 
 from ament_index_python.packages import get_package_share_directory
+from catkin_pkg.package import InvalidPackage, PACKAGE_MANIFEST_FILENAME, parse_package
+from ros2pkg.api import get_package_names
 
 
 from launch import LaunchDescription
-from launch.actions import IncludeLaunchDescription
+from launch.actions import DeclareLaunchArgument, ExecuteProcess, IncludeLaunchDescription, Shutdown
+from launch.conditions import IfCondition, UnlessCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
+from launch.substitutions import LaunchConfiguration
 
 from launch_ros.actions import Node
+
+
+def _get_gazebo_paths():
+    gazebo_model_path = []
+    gazebo_plugin_path = []
+    gazebo_media_path = []
+
+    for package_name in get_package_names():
+        package_share_path = get_package_share_directory(package_name)
+        package_file_path = os.path.join(package_share_path, PACKAGE_MANIFEST_FILENAME)
+        if not os.path.isfile(package_file_path):
+            continue
+
+        try:
+            package = parse_package(package_file_path)
+        except InvalidPackage:
+            continue
+
+        for export in package.exports:
+            if export.tagname != 'gazebo_ros':
+                continue
+
+            if 'gazebo_model_path' in export.attributes:
+                xml_path = export.attributes['gazebo_model_path']
+                gazebo_model_path.append(xml_path.replace('${prefix}', package_share_path))
+            if 'plugin_path' in export.attributes:
+                xml_path = export.attributes['plugin_path']
+                gazebo_plugin_path.append(xml_path.replace('${prefix}', package_share_path))
+            if 'gazebo_media_path' in export.attributes:
+                xml_path = export.attributes['gazebo_media_path']
+                gazebo_media_path.append(xml_path.replace('${prefix}', package_share_path))
+
+    return (
+        os.pathsep.join(gazebo_model_path + gazebo_media_path),
+        os.pathsep.join(gazebo_plugin_path),
+    )
+
+
+def _build_gz_env():
+    # Gazebo GUI launched from the VS Code snap inherits a broken runtime
+    # environment. Start Gazebo with a minimal clean environment so GUI mode
+    # works while the ROS nodes keep their regular environment.
+    model_paths, plugin_paths = _get_gazebo_paths()
+    whitelist = [
+        'HOME',
+        'USER',
+        'LOGNAME',
+        'SHELL',
+        'DISPLAY',
+        'WAYLAND_DISPLAY',
+        'XDG_RUNTIME_DIR',
+        'XAUTHORITY',
+        'PATH',
+        'LD_LIBRARY_PATH',
+        'GZ_CONFIG_PATH',
+    ]
+    env = {key: os.environ[key] for key in whitelist if os.environ.get(key)}
+    env['GZ_SIM_SYSTEM_PLUGIN_PATH'] = os.pathsep.join(
+        path
+        for path in [
+            os.environ.get('GZ_SIM_SYSTEM_PLUGIN_PATH', ''),
+            os.environ.get('LD_LIBRARY_PATH', ''),
+            plugin_paths,
+        ]
+        if path
+    )
+    env['GZ_SIM_RESOURCE_PATH'] = os.pathsep.join(
+        path
+        for path in [
+            os.environ.get('GZ_SIM_RESOURCE_PATH', ''),
+            model_paths,
+        ]
+        if path
+    )
+    return env
 
 
 
@@ -18,11 +98,32 @@ def generate_launch_description():
     # !!! MAKE SURE YOU SET THE PACKAGE NAME CORRECTLY !!!
 
     package_name='ar_project' #<--- CHANGE ME
+    default_world = os.path.join(
+        get_package_share_directory(package_name),
+        'worlds',
+        'empty.world',
+    )
+    world = LaunchConfiguration('world')
+    world_arg = DeclareLaunchArgument(
+        'world',
+        default_value=default_world,
+        description='World to load',
+    )
+    gui = LaunchConfiguration('gui')
+    gui_arg = DeclareLaunchArgument(
+        'gui',
+        default_value='true',
+        description='Launch Gazebo Sim with the graphical interface',
+    )
+    gz_script = shutil.which('gz') or '/opt/ros/jazzy/opt/gz_tools_vendor/bin/gz'
+    ruby_bin = shutil.which('ruby') or 'ruby'
+    gz_env = _build_gz_env()
+    gz_env_prefix = ['env', '-i'] + [f'{key}={value}' for key, value in gz_env.items()]
 
     rsp = IncludeLaunchDescription(
                 PythonLaunchDescriptionSource([os.path.join(
                     get_package_share_directory(package_name),'launch','rsp.launch.py'
-                )]), launch_arguments={'use_sim_time': 'true', 'use_ros2_control': 'true'}.items()
+                )]), launch_arguments={'use_sim_time': 'true', 'use_ros2_control': 'false'}.items()
     )
 
     twist_mux_params = os.path.join(get_package_share_directory(package_name), 'config', 'twist_mux.yaml')
@@ -32,42 +133,55 @@ def generate_launch_description():
         parameters = [twist_mux_params, {'use_sim_time': True}],
         remappings = [('/cmd_vel_out', '/diff_cont/cmd_vel_unstamped')]
     )
+    bridge_params = os.path.join(get_package_share_directory(package_name), 'config', 'gz_bridge.yaml')
 
-    gazebo_params_file = os.path.join(get_package_share_directory(package_name),'config','gazebo_params.yaml')
+    # Launch Gazebo Sim directly so we can give it a clean environment in GUI mode.
+    gazebo_gui = ExecuteProcess(
+        cmd=gz_env_prefix + [ruby_bin, gz_script, 'sim', '-r', '-v', '4', world, '--force-version', '8'],
+        name='gazebo',
+        output='screen',
+        condition=IfCondition(gui),
+        on_exit=Shutdown(),
+    )
+    gazebo_headless = ExecuteProcess(
+        cmd=gz_env_prefix + [ruby_bin, gz_script, 'sim', '-r', '-s', '--headless-rendering', '-v', '4', world, '--force-version', '8'],
+        name='gazebo',
+        output='screen',
+        condition=UnlessCondition(gui),
+        on_exit=Shutdown(),
+    )
 
-    # Include the Gazebo launch file, provided by the gazebo_ros package
-    gazebo = IncludeLaunchDescription(
-                PythonLaunchDescriptionSource([os.path.join(
-                    get_package_share_directory('gazebo_ros'), 'launch', 'gazebo.launch.py')]),
-                    launch_arguments={'extra_gazebo_args': '--ros-args --params-file ' + gazebo_params_file}.items()
-             )
-
-    # Run the spawner node from the gazebo_ros package. The entity name doesn't really matter if you only have a single robot.
-    spawn_entity = Node(package='gazebo_ros', executable='spawn_entity.py',
+    # Spawn the URDF model into Gazebo Sim from robot_description.
+    spawn_entity = Node(package='ros_gz_sim', executable='create',
                         arguments=['-topic', 'robot_description',
-                                   '-entity', 'my_bot'],
+                                   '-name', 'my_bot',
+                                   '-z', '0.1'],
                         output='screen')
 
-
-    diff_drive_spawner = Node(
-        package="controller_manager",
-        executable="spawner",
-        arguments=["diff_cont"],
+    ros_gz_bridge = Node(
+        package='ros_gz_bridge',
+        executable='parameter_bridge',
+        arguments=['--ros-args', '-p', f'config_file:={bridge_params}'],
+        output='screen',
     )
 
-    joint_broad_spawner = Node(
-        package="controller_manager",
-        executable="spawner",
-        arguments=["joint_broad"],
+    # Keep the image topics stable for object_tracking while the rest of the migration lands.
+    ros_gz_image_bridge = Node(
+        package='ros_gz_image',
+        executable='image_bridge',
+        arguments=['/camera/image_raw', '/depth_camera/depth/image_raw'],
+        parameters=[{'qos': 'sensor_data'}],
+        output='screen',
     )
-
-
     # Launch them all!
     return LaunchDescription([
         rsp,
         twist_mux,
-        gazebo,
+        world_arg,
+        gui_arg,
+        gazebo_gui,
+        gazebo_headless,
         spawn_entity,
-        diff_drive_spawner,
-        joint_broad_spawner,
+        ros_gz_bridge,
+        ros_gz_image_bridge,
     ])

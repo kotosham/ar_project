@@ -21,4 +21,7 @@ diff_cont:
     wheel_radius: 0.05
     wheels_per_side: 1
 
+    position_feedback: false
+    open_loop: true
+    enable_odom_tf: true
     use_stamped_vel: false
