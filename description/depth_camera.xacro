@@ -1,38 +1,37 @@
 <?xml version="1.0"?>
 <robot xmlns:xacro="http://www.ros.org/wiki/xacro">
 
+    <!--
+      Keep legacy depth_camera_* frames as aliases so existing code keeps
+      working, but mount the simulated depth sensor on the same physical
+      camera_link/camera_link_optical frames as the RGB camera.
+    -->
     <joint name="depth_camera_joint" type="fixed">
-        <parent link="chassis"/>
+        <parent link="camera_link"/>
         <child link="depth_camera_link"/>
-        <origin xyz="0.455 0 0.08" rpy="0 0 0"/>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
     </joint>
 
-    <link name="depth_camera_link"> 
-        <visual>
-            <geometry>
-                <box size="0.01 0.03 0.03"/>
-            </geometry>
-            <material name="red"/>
-        </visual>
-    </link>
+    <link name="depth_camera_link"></link>
 
     <joint name="depth_camera_optical_joint" type="fixed">
-        <parent link="depth_camera_link"/>
+        <parent link="camera_link_optical"/>
         <child link="depth_camera_link_optical"/>
-        <origin xyz="0 0 0" rpy="${-pi/2} 0 ${-pi/2}"/>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
     </joint>
 
     <link name="depth_camera_link_optical"></link>
 
-    <gazebo reference="depth_camera_link">
+    <gazebo reference="camera_link">
         <sensor name="depth_camera" type="depth">
             <pose>0 0 0 0 0 0</pose>
             <always_on>true</always_on>
             <visualize>true</visualize>
-            <update_rate>10</update_rate>
-            <topic>depth_camera/depth/image_raw</topic>
-            <gz_frame_id>depth_camera_link_optical</gz_frame_id>
+            <update_rate>30</update_rate>
+            <topic>camera/camera/depth/image_rect_raw</topic>
+            <gz_frame_id>camera_link_optical</gz_frame_id>
             <camera>
+                <camera_info_topic>camera/camera/depth/camera_info</camera_info_topic>
                 <horizontal_fov>1.089</horizontal_fov>
                 <image>
                     <width>640</width>
@@ -46,7 +45,6 @@
                 </depth_camera>
             </camera>
         </sensor>
-        <material>Gazebo/Red</material>
     </gazebo>
 
 </robot>

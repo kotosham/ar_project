@@ -218,14 +218,8 @@ def generate_launch_description():
         parameters=[{'use_sim_time': True}],
     )
 
-    # Keep the image topics stable for object_tracking while the rest of the migration lands.
-    ros_gz_image_bridge = Node(
-        package='ros_gz_image',
-        executable='image_bridge',
-        arguments=['/camera/image_raw', '/depth_camera/depth/image_raw'],
-        parameters=[{'qos': 'sensor_data'}],
-        output='screen',
-    )
+    # The parameter bridge publishes both the new RealSense-like RGB-D topics
+    # and the legacy aliases consumed by the current stack.
     # Launch them all!
     return LaunchDescription([
         world_arg,
@@ -238,6 +232,5 @@ def generate_launch_description():
         spawn_entity,
         spawn_controllers,
         ros_gz_bridge,
-        ros_gz_image_bridge,
         odom_tf_bridge,
     ])
