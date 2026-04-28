@@ -12,19 +12,14 @@ slam_toolbox:
     # ROS Parameters
     odom_frame: odom
     map_frame: map
-    base_frame: base_footprint
+    base_frame: base_link
     scan_topic: /scan
     use_map_saver: true
-    mode: localization #mapping #
+    mode: mapping
 
-    # if you'd like to immediately start continuing a map at a given pose
-    # or at the dock, but they are mutually exclusive, if pose is given
-    # will use pose
-    map_file_name: /home/clv/ros2_ws/src/ar_project/maps/test_map_1/test_world_1_map_serial
-    #map_file_name: /home/clv/ros2_ws/src/ar_project/maps/test_map_2/test_world_2_map_serial
-    #map_file_name: /home/clv/ros2_ws/src/ar_project/maps/test_map_3/test_world_3_map_serial
-    # map_start_pose: [0.0, 0.0, 0.0]
-    map_start_at_dock: true
+    # For Gazebo demo worlds we build the map online from scratch.
+    map_file_name: ""
+    map_start_at_dock: false
 
     debug_logging: false
     throttle_scans: 1
@@ -32,7 +27,7 @@ slam_toolbox:
     map_update_interval: 5.0
     resolution: 0.05
     min_laser_range: 0.0 #for rastering images
-    max_laser_range: 20.0 #for rastering images
+    max_laser_range: 12.0 # match the simulated lidar capability
     minimum_time_interval: 0.5
     transform_timeout: 0.2
     tf_buffer_duration: 30.

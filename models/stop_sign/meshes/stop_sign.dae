@@ -14,32 +14,36 @@
   <library_effects>
     <effect id="_1_-_Default">
       <profile_COMMON>
+        <newparam sid="StopSign_Diffuse_png-surface">
+          <surface type="2D">
+            <init_from>StopSign_Diffuse_png</init_from>
+          </surface>
+        </newparam>
+        <newparam sid="StopSign_Diffuse_png-sampler">
+          <sampler2D>
+            <source>StopSign_Diffuse_png-surface</source>
+          </sampler2D>
+        </newparam>
         <technique sid="common">
           <blinn>
             <emission>
-              <color>0.4 0.4 0.4 1</color>
+              <color>0.18 0.18 0.18 1</color>
             </emission>
             <ambient>
               <color>1 1 1 1</color>
             </ambient>
             <diffuse>
-              <color>1 1 1 1</color>
+              <texture texture="StopSign_Diffuse_png-sampler" texcoord="CHANNEL1"/>
             </diffuse>
             <specular>
-              <color>0.9 0.9 0.9 1</color>
+              <color>0.35 0.35 0.35 1</color>
             </specular>
             <shininess>
-              <float>9.999999</float>
+              <float>18</float>
             </shininess>
             <reflective>
               <color>0 0 0 1</color>
             </reflective>
-            <transparent opaque="A_ONE">
-              <color>1 1 1 1</color>
-            </transparent>
-            <transparency>
-              <float>1</float>
-            </transparency>
           </blinn>
         </technique>
       </profile_COMMON>
@@ -125,6 +129,11 @@
       </technique_common>
     </light>
   </library_lights>
+  <library_images>
+    <image id="StopSign_Diffuse_png">
+      <init_from>../materials/textures/StopSign_Diffuse.png</init_from>
+    </image>
+  </library_images>
   <library_visual_scenes>
     <visual_scene id="MaxScene">
       <node name="EnvironmentAmbientLight">

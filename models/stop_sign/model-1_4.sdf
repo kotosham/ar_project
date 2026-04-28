@@ -15,13 +15,6 @@
             <uri>model://stop_sign/meshes/stop_sign.dae</uri>
           </mesh>
         </geometry>
-        <material>
-          <script>
-            <uri>model://stop_sign/materials/scripts</uri>
-            <uri>model://stop_sign/materials/textures</uri>
-            <name>StopSign/Diffuse</name>
-          </script>
-        </material>
       </visual>
     </link>
   </model>

@@ -7,8 +7,9 @@ from ros2pkg.api import get_package_names
 
 
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, ExecuteProcess, IncludeLaunchDescription, Shutdown
+from launch.actions import DeclareLaunchArgument, ExecuteProcess, IncludeLaunchDescription, RegisterEventHandler, Shutdown
 from launch.conditions import IfCondition, UnlessCondition
+from launch.event_handlers import OnProcessExit
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 
@@ -67,6 +68,12 @@ def _build_gz_env():
         'XAUTHORITY',
         'PATH',
         'LD_LIBRARY_PATH',
+        'AMENT_PREFIX_PATH',
+        'COLCON_PREFIX_PATH',
+        'CMAKE_PREFIX_PATH',
+        'PYTHONPATH',
+        'ROS_DISTRO',
+        'ROS_VERSION',
         'GZ_CONFIG_PATH',
     ]
     env = {key: os.environ[key] for key in whitelist if os.environ.get(key)}
@@ -115,15 +122,27 @@ def generate_launch_description():
         default_value='true',
         description='Launch Gazebo Sim with the graphical interface',
     )
+    gui_config = os.path.join(
+        get_package_share_directory(package_name),
+        'config',
+        'gz_gui.config',
+    )
     gz_script = shutil.which('gz') or '/opt/ros/jazzy/opt/gz_tools_vendor/bin/gz'
     ruby_bin = shutil.which('ruby') or 'ruby'
     gz_env = _build_gz_env()
     gz_env_prefix = ['env', '-i'] + [f'{key}={value}' for key, value in gz_env.items()]
 
+    use_ros2_control = LaunchConfiguration('use_ros2_control')
+    use_ros2_control_arg = DeclareLaunchArgument(
+        'use_ros2_control',
+        default_value='false',
+        description='Use gz_ros2_control and ROS diff drive controller for wheel control',
+    )
+
     rsp = IncludeLaunchDescription(
                 PythonLaunchDescriptionSource([os.path.join(
                     get_package_share_directory(package_name),'launch','rsp.launch.py'
-                )]), launch_arguments={'use_sim_time': 'true', 'use_ros2_control': 'false'}.items()
+                )]), launch_arguments={'use_sim_time': 'true', 'use_ros2_control': use_ros2_control}.items()
     )
 
     twist_mux_params = os.path.join(get_package_share_directory(package_name), 'config', 'twist_mux.yaml')
@@ -137,7 +156,7 @@ def generate_launch_description():
 
     # Launch Gazebo Sim directly so we can give it a clean environment in GUI mode.
     gazebo_gui = ExecuteProcess(
-        cmd=gz_env_prefix + [ruby_bin, gz_script, 'sim', '-r', '-v', '4', world, '--force-version', '8'],
+        cmd=gz_env_prefix + [ruby_bin, gz_script, 'sim', '-r', '-v', '4', '--gui-config', gui_config, world, '--force-version', '8'],
         name='gazebo',
         output='screen',
         condition=IfCondition(gui),
@@ -158,11 +177,45 @@ def generate_launch_description():
                                    '-z', '0.1'],
                         output='screen')
 
+    joint_state_broadcaster_spawner = Node(
+        package='controller_manager',
+        executable='spawner',
+        arguments=['joint_broad', '--controller-manager', '/controller_manager'],
+        output='screen',
+        condition=IfCondition(use_ros2_control),
+    )
+
+    diff_drive_controller_spawner = Node(
+        package='controller_manager',
+        executable='spawner',
+        arguments=['diff_cont', '--controller-manager', '/controller_manager'],
+        output='screen',
+        condition=IfCondition(use_ros2_control),
+    )
+
+    spawn_controllers = RegisterEventHandler(
+        OnProcessExit(
+            target_action=spawn_entity,
+            on_exit=[
+                joint_state_broadcaster_spawner,
+                diff_drive_controller_spawner,
+            ],
+        )
+    )
+
     ros_gz_bridge = Node(
         package='ros_gz_bridge',
         executable='parameter_bridge',
         arguments=['--ros-args', '-p', f'config_file:={bridge_params}'],
         output='screen',
+    )
+
+    odom_tf_bridge = Node(
+        package=package_name,
+        executable='odom_to_tf.py',
+        name='odom_to_tf',
+        output='screen',
+        parameters=[{'use_sim_time': True}],
     )
 
     # Keep the image topics stable for object_tracking while the rest of the migration lands.
@@ -175,13 +228,16 @@ def generate_launch_description():
     )
     # Launch them all!
     return LaunchDescription([
-        rsp,
-        twist_mux,
         world_arg,
         gui_arg,
+        use_ros2_control_arg,
+        rsp,
+        twist_mux,
         gazebo_gui,
         gazebo_headless,
         spawn_entity,
+        spawn_controllers,
         ros_gz_bridge,
         ros_gz_image_bridge,
+        odom_tf_bridge,
     ])

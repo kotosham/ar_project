@@ -534,11 +534,17 @@
             </mesh>
           </geometry>
           <material>
-            <script>
-              <uri>model://stop_sign/materials/scripts</uri>
-              <uri>model://stop_sign/materials/textures</uri>
-              <name>StopSign/Diffuse</name>
-            </script>
+            <ambient>1 1 1 1</ambient>
+            <diffuse>1 1 1 1</diffuse>
+            <specular>0.2 0.2 0.2 1</specular>
+            <emissive>0.16 0.16 0.16 1</emissive>
+            <pbr>
+              <metal>
+                <albedo_map>model://stop_sign/materials/textures/StopSign_Diffuse.png</albedo_map>
+                <roughness>0.7</roughness>
+                <metalness>0.0</metalness>
+              </metal>
+            </pbr>
           </material>
         </visual>
         <self_collide>0</self_collide>
@@ -881,6 +887,19 @@
               <uri>model://construction_cone/meshes/construction_cone.dae</uri>
             </mesh>
           </geometry>
+          <material>
+            <ambient>1 1 1 1</ambient>
+            <diffuse>1 1 1 1</diffuse>
+            <specular>0.18 0.18 0.18 1</specular>
+            <emissive>0.2 0.2 0.2 1</emissive>
+            <pbr>
+              <metal>
+                <albedo_map>model://construction_cone/materials/textures/Construction_Cone_Diffuse.png</albedo_map>
+                <roughness>0.8</roughness>
+                <metalness>0.0</metalness>
+              </metal>
+            </pbr>
+          </material>
         </visual>
         <self_collide>0</self_collide>
         <inertial>
