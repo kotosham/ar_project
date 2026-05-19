@@ -1,0 +1,28 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro">
+
+    <ros2_control name="EPOS4DiffDriveHardware" type="system">
+        <hardware>
+            <plugin>ar_project/EmbodiedRobotSystem</plugin>
+            <param name="bus_config">$(find ar_project)/config/epos4_diffdrive/bus.yml</param>
+            <param name="master_config">$(find ar_project)/config/epos4_diffdrive/master.dcf</param>
+            <param name="master_bin">$(find ar_project)/config/epos4_diffdrive/master.bin</param>
+            <param name="can_interface_name">$(arg can_interface_name)</param>
+        </hardware>
+
+        <joint name="left_wheel_joint">
+            <param name="device_name">left_wheel_joint</param>
+            <command_interface name="velocity"/>
+            <state_interface name="position"/>
+            <state_interface name="velocity"/>
+        </joint>
+
+        <joint name="right_wheel_joint">
+            <param name="device_name">right_wheel_joint</param>
+            <command_interface name="velocity"/>
+            <state_interface name="position"/>
+            <state_interface name="velocity"/>
+        </joint>
+    </ros2_control>
+
+</robot>

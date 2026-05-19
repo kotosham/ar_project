@@ -1,0 +1,11 @@
+<library path="ar_project_embodied_robot_system">
+  <class
+    name="ar_project/EmbodiedRobotSystem"
+    type="ar_project::EmbodiedRobotSystem"
+    base_class_type="hardware_interface::SystemInterface">
+    <description>
+      EPOS4-specific ros2_control system that reuses ros2_canopen RobotSystem
+      setup but activates drives through enable/recover instead of init+homing.
+    </description>
+  </class>
+</library>

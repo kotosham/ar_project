@@ -17,9 +17,36 @@ endif()
 
 # find dependencies
 find_package(ament_cmake REQUIRED)
+find_package(canopen_402_driver REQUIRED)
+find_package(canopen_ros2_control REQUIRED)
+find_package(hardware_interface REQUIRED)
+find_package(lely_core_libraries REQUIRED)
+find_package(pluginlib REQUIRED)
+find_package(rclcpp REQUIRED)
+find_package(rclcpp_lifecycle REQUIRED)
 # uncomment the following section in order to fill in
 # further dependencies manually.
 # find_package(<dependency> REQUIRED)
+
+add_library(ar_project_embodied_robot_system SHARED
+  src/embodied_robot_system.cpp
+)
+
+target_include_directories(ar_project_embodied_robot_system PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include>
+)
+
+ament_target_dependencies(ar_project_embodied_robot_system
+  canopen_402_driver
+  canopen_ros2_control
+  hardware_interface
+  pluginlib
+  rclcpp
+  rclcpp_lifecycle
+)
+
+pluginlib_export_plugin_description_file(hardware_interface ar_project_hardware_plugins.xml)
 
 if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)
@@ -38,8 +65,25 @@ install(
 )
 
 install(
-  PROGRAMS scripts/odom_to_tf.py
+  DIRECTORY include/
+  DESTINATION include
+)
+
+install(
+  PROGRAMS
+    scripts/odom_to_tf.py
+    scripts/twist_to_twist_stamped.py
   DESTINATION lib/${PROJECT_NAME}
 )
+
+install(
+  TARGETS ar_project_embodied_robot_system
+  EXPORT export_${PROJECT_NAME}
+  ARCHIVE DESTINATION lib
+  LIBRARY DESTINATION lib
+  RUNTIME DESTINATION bin
+)
+
+cogen_dcf(epos4_diffdrive)
 
 ament_package()
