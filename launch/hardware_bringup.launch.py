@@ -175,8 +175,8 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             'start_joint_state_broadcaster',
-            default_value='false',
-            description='Spawn joint_state_broadcaster. Disabled by default because it crashes on this Jazzy setup.',
+            default_value='true',
+            description='Spawn joint_state_broadcaster alongside the diff drive controller.',
         ),
         control_node,
         robot_state_publisher,

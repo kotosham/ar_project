@@ -1,0 +1,57 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro">
+
+    <!-- Sim-only Gazebo sensors mounted on the TF frames defined by
+         camera.xacro/depth_camera.xacro. Keep this separate so the real
+         robot description only contains geometry and frame definitions. -->
+    <gazebo reference="camera_link">
+        <sensor name="camera" type="camera">
+            <pose>0 0 0 0 0 0</pose>
+            <always_on>true</always_on>
+            <visualize>true</visualize>
+            <update_rate>30</update_rate>
+            <camera>
+                <camera_info_topic>camera/camera/color/camera_info</camera_info_topic>
+                <horizontal_fov>1.089</horizontal_fov>
+                <image>
+                    <format>R8G8B8</format>
+                    <width>640</width>
+                    <height>480</height>
+                </image>
+                <clip>
+                    <near>0.05</near>
+                    <far>8.0</far>
+                </clip>
+            </camera>
+            <topic>camera/camera/color/image_raw</topic>
+            <gz_frame_id>camera_link_optical</gz_frame_id>
+        </sensor>
+        <material>Gazebo/Red</material>
+    </gazebo>
+
+    <gazebo reference="camera_link">
+        <sensor name="depth_camera" type="depth">
+            <pose>0 0 0 0 0 0</pose>
+            <always_on>true</always_on>
+            <visualize>true</visualize>
+            <update_rate>30</update_rate>
+            <topic>camera/camera/depth/image_rect_raw</topic>
+            <gz_frame_id>camera_link_optical</gz_frame_id>
+            <camera>
+                <camera_info_topic>camera/camera/depth/camera_info</camera_info_topic>
+                <horizontal_fov>1.089</horizontal_fov>
+                <image>
+                    <width>640</width>
+                    <height>480</height>
+                </image>
+                <depth_camera>
+                    <clip>
+                        <near>0.05</near>
+                        <far>8.0</far>
+                    </clip>
+                </depth_camera>
+            </camera>
+        </sensor>
+    </gazebo>
+
+</robot>

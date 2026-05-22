@@ -14,6 +14,7 @@ def generate_launch_description():
     rtabmap_viz = LaunchConfiguration('rtabmap_viz')
     rviz = LaunchConfiguration('rviz')
     database_path = LaunchConfiguration('database_path')
+    odom_topic = LaunchConfiguration('odom_topic')
 
     include_rtabmap = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
@@ -25,6 +26,7 @@ def generate_launch_description():
             'rtabmap_viz': rtabmap_viz,
             'rviz': rviz,
             'database_path': database_path,
+            'odom_topic': odom_topic,
         }.items(),
     )
 
@@ -38,6 +40,11 @@ def generate_launch_description():
             'database_path',
             default_value='~/.ros/rtabmap_rgbd.db',
             description='RTAB-Map database path used for localization.',
+        ),
+        DeclareLaunchArgument(
+            'odom_topic',
+            default_value='/diff_cont/odom',
+            description='Wheel odometry topic used by RTAB-Map. Override to /odom for simulation.',
         ),
         DeclareLaunchArgument(
             'rtabmap_viz',

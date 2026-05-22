@@ -5,5 +5,9 @@
 
     <xacro:include filename="robot_core.xacro"/>
     <xacro:include filename="ros2_control_hardware.xacro"/>
+    <!-- Keep the camera mount and legacy depth aliases in the real robot
+         description so the RealSense TF tree can attach to base_link. -->
+    <xacro:include filename="camera.xacro"/>
+    <xacro:include filename="depth_camera.xacro"/>
 
 </robot>

@@ -62,7 +62,7 @@ def generate_launch_description():
     )
     declare_odom_topic = DeclareLaunchArgument(
         'odom_topic',
-        default_value='/odom',
+        default_value='/diff_cont/odom',
         description='Wheel odometry topic used as the primary motion estimate for RTAB-Map.',
     )
     declare_point_cloud_topic = DeclareLaunchArgument(
