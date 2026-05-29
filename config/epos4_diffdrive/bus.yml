@@ -11,7 +11,7 @@ master:
   boot_timeout: 5000
 
 defaults:
-  dcf: "maxon_motor_EPOS4_0161h_6150h_0000h_0000h_fixed.eds"
+  dcf: "maxon_motor_EPOS4_0170h_6150h_0000h_0000h.eds"
   driver: "ros2_canopen::Cia402Driver"
   package: "canopen_402_driver"
   period: 20
