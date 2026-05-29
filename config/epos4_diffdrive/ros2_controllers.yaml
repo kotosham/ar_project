@@ -31,7 +31,7 @@ diff_cont:
     open_loop: false
     use_stamped_vel: false
 
-    cmd_vel_timeout: 0.1
+    cmd_vel_timeout: 0.5
     velocity_rolling_window_size: 10
     publish_limited_velocity: true
 

@@ -92,6 +92,8 @@ nodes:
   left_wheel_joint:
     node_id: 1
     namespace: "/"
+    direction_sign: 1.0
   right_wheel_joint:
     node_id: 2
     namespace: "/"
+    direction_sign: -1.0

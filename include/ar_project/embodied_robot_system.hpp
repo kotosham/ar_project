@@ -44,10 +44,11 @@ private:
 
   void poll_and_log_fault_state(canopen_ros2_control::Cia402Data & motor);
 
-  double joint_direction_sign(const std::string & joint_name) const;
+  double joint_direction_sign(const std::string & joint_name);
 
   double velocity_scale_for_joint(const std::string & joint_name);
 
+  std::unordered_map<std::string, double> joint_direction_signs_;
   std::unordered_map<std::string, double> velocity_scale_to_dev_;
   std::unordered_set<std::string> active_faults_;
   size_t fault_poll_counter_ = 0;

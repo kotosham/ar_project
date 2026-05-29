@@ -128,17 +128,50 @@ void EmbodiedRobotSystem::poll_and_log_fault_state(canopen_ros2_control::Cia402D
   }
 }
 
-double EmbodiedRobotSystem::joint_direction_sign(const std::string & joint_name) const
+double EmbodiedRobotSystem::joint_direction_sign(const std::string & joint_name)
 {
-  // The real hardware sign convention differs from the nominal URDF convention on the left side.
-  // Applying the correction here keeps diff_drive_controller in joint space while commanding the
-  // EPOS4s with the raw sign each motor expects.
-  if (joint_name == "left_wheel_joint")
+  const auto cached = joint_direction_signs_.find(joint_name);
+  if (cached != joint_direction_signs_.end())
   {
-    return -1.0;
+    return cached->second;
   }
 
-  return 1.0;
+  // The default signs preserve the original embodied setup. They can be
+  // overridden per joint in bus.yml when the real motor orientation changes.
+  double sign = (joint_name == "left_wheel_joint") ? -1.0 : 1.0;
+
+  try
+  {
+    const auto bus_config = YAML::LoadFile(bus_config_);
+
+    if (bus_config["defaults"] && bus_config["defaults"]["direction_sign"])
+    {
+      sign = bus_config["defaults"]["direction_sign"].as<double>();
+    }
+
+    if (
+      bus_config["nodes"] && bus_config["nodes"][joint_name] &&
+      bus_config["nodes"][joint_name]["direction_sign"])
+    {
+      sign = bus_config["nodes"][joint_name]["direction_sign"].as<double>();
+    }
+
+    // Installed/generated bus.yml is flattened, with one top-level key per joint.
+    if (bus_config[joint_name] && bus_config[joint_name]["direction_sign"])
+    {
+      sign = bus_config[joint_name]["direction_sign"].as<double>();
+    }
+  }
+  catch (const std::exception & e)
+  {
+    RCLCPP_WARN(
+      robot_system_logger,
+      "Failed to read direction_sign for joint '%s' from '%s': %s. Falling back to %.1f.",
+      joint_name.c_str(), bus_config_.c_str(), e.what(), sign);
+  }
+
+  joint_direction_signs_[joint_name] = sign;
+  return sign;
 }
 
 double EmbodiedRobotSystem::velocity_scale_for_joint(const std::string & joint_name)
