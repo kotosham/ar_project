@@ -358,10 +358,10 @@ hardware_interface::return_type EmbodiedRobotSystem::read(
     motor.actual_effort = 0.0;
   }
 
-  // Poll fault state at a low rate to catch EPOS4 red-LED conditions without
-  // spamming the bus every control cycle.
+  // Poll fault state conservatively to catch EPOS4 red-LED conditions without
+  // adding frequent SDO traffic on a bus that is already time-sensitive.
   fault_poll_counter_++;
-  if (fault_poll_counter_ >= 25U)
+  if (fault_poll_counter_ >= 100U)
   {
     fault_poll_counter_ = 0U;
     for (auto & motor : robot_motor_data_)

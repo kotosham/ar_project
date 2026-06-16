@@ -18,7 +18,7 @@ diff_cont:
     left_wheel_names: ['left_wheel_joint']
     right_wheel_names: ['right_wheel_joint']
     wheel_separation: 0.295
-    wheel_radius: 0.039
+    wheel_radius: 0.038
     wheels_per_side: 1
 
     position_feedback: false

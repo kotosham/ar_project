@@ -34,6 +34,7 @@ def generate_launch_description():
     use_sim_time = LaunchConfiguration('use_sim_time')
     autostart = LaunchConfiguration('autostart')
     params_file = LaunchConfiguration('params_file')
+    odom_topic = LaunchConfiguration('odom_topic')
     use_composition = LaunchConfiguration('use_composition')
     container_name = LaunchConfiguration('container_name')
     container_name_full = (namespace, '/', container_name)
@@ -60,7 +61,8 @@ def generate_launch_description():
     # Create our own temporary YAML files that include substitutions
     param_substitutions = {
         'use_sim_time': use_sim_time,
-        'autostart': autostart}
+        'autostart': autostart,
+        'odom_topic': odom_topic}
 
     configured_params = ParameterFile(
         RewrittenYaml(
@@ -91,6 +93,12 @@ def generate_launch_description():
     declare_autostart_cmd = DeclareLaunchArgument(
         'autostart', default_value='true',
         description='Automatically startup the nav2 stack')
+
+    declare_odom_topic_cmd = DeclareLaunchArgument(
+        'odom_topic',
+        default_value='/odometry/filtered',
+        description='Odometry topic used by Nav2 lifecycle nodes and velocity smoother.',
+    )
 
     declare_use_composition_cmd = DeclareLaunchArgument(
         'use_composition', default_value='False',
@@ -261,6 +269,7 @@ def generate_launch_description():
     ld.add_action(declare_use_sim_time_cmd)
     ld.add_action(declare_params_file_cmd)
     ld.add_action(declare_autostart_cmd)
+    ld.add_action(declare_odom_topic_cmd)
     ld.add_action(declare_use_composition_cmd)
     ld.add_action(declare_container_name_cmd)
     ld.add_action(declare_use_respawn_cmd)

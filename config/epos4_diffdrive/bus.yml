@@ -16,6 +16,8 @@ defaults:
   package: "canopen_402_driver"
   period: 20
   polling: true
+  # Give occasional SDO diagnostics a bit more margin on the Pi.
+  sdo_timeout_ms: 100
   diagnostics:
     enable: false
   heartbeat_producer: 2000
@@ -57,6 +59,9 @@ defaults:
       mapping:
         - {index: 0x6041, sub_index: 0}  # status word
         - {index: 0x6061, sub_index: 0}  # mode of operation display
+        # Publish torque actual value via TPDO so the CiA402 driver doesn't
+        # fall back to SDO reads for 0x6077 in its background joint-state publisher.
+        - {index: 0x6077, sub_index: 0}  # torque actual value
     2:
       enabled: true
       cob_id: "auto"

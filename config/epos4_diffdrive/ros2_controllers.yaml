@@ -19,17 +19,27 @@ diff_cont:
 
     left_wheel_names: ["left_wheel_joint"]
     right_wheel_names: ["right_wheel_joint"]
-    wheel_separation: 0.295
-    wheel_radius: 0.039
+    wheel_separation: 0.35
+    wheel_radius: 0.038
     wheels_per_side: 1
+    # Keep the nominal geometry above equal to the measured robot dimensions.
+    # Use the multipliers below for empirical odometry calibration on hardware:
+    # - wheel_separation_multiplier mostly affects yaw / turning accuracy
+    # - left/right_wheel_radius_multiplier can compensate asymmetric straight drift
+    wheel_separation_multiplier: 1.0265
+    left_wheel_radius_multiplier: 1.055
+    right_wheel_radius_multiplier: 1.055
 
     odom_frame_id: odom
     base_frame_id: base_link
-    enable_odom_tf: true
+    # EKF publishes the authoritative odom -> base_link transform.
+    # Keep the raw wheel odometry on /diff_cont/odom, but avoid conflicting TFs.
+    enable_odom_tf: false
 
     position_feedback: true
     open_loop: false
-    use_stamped_vel: false
+    # hardware_bringup converts twist_mux output to TwistStamped on /diff_cont/cmd_vel.
+    use_stamped_vel: true
 
     cmd_vel_timeout: 0.5
     velocity_rolling_window_size: 10

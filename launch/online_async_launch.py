@@ -16,6 +16,9 @@ def generate_launch_description():
     rviz = LaunchConfiguration('rviz')
     database_path = LaunchConfiguration('database_path')
     odom_topic = LaunchConfiguration('odom_topic')
+    start_at_origin = LaunchConfiguration('start_at_origin')
+    enable_visual_odometry = LaunchConfiguration('enable_visual_odometry')
+    visual_odom_topic = LaunchConfiguration('visual_odom_topic')
 
     include_rtabmap = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
@@ -28,14 +31,17 @@ def generate_launch_description():
             'rviz': rviz,
             'database_path': database_path,
             'odom_topic': odom_topic,
+            'start_at_origin': start_at_origin,
+            'enable_visual_odometry': enable_visual_odometry,
+            'visual_odom_topic': visual_odom_topic,
         }.items(),
     )
 
     return LaunchDescription([
         DeclareLaunchArgument(
             'use_sim_time',
-            default_value='true',
-            description='Use simulation clock.',
+            default_value='false',
+            description='Use simulation clock. Keep false on hardware.',
         ),
         DeclareLaunchArgument(
             'localization',
@@ -59,8 +65,23 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             'odom_topic',
-            default_value='/diff_cont/odom',
-            description='Wheel odometry topic used by RTAB-Map. Override to /odom for simulation.',
+            default_value='/odometry/filtered',
+            description='Filtered odometry topic used by RTAB-Map. Override to /odom for simulation.',
+        ),
+        DeclareLaunchArgument(
+            'start_at_origin',
+            default_value='true',
+            description='When localizing, start from the map origin instead of the last saved localization pose.',
+        ),
+        DeclareLaunchArgument(
+            'enable_visual_odometry',
+            default_value='false',
+            description='Launch a separate RGB-D visual odometry node and publish it on visual_odom_topic for optional EKF fusion.',
+        ),
+        DeclareLaunchArgument(
+            'visual_odom_topic',
+            default_value='/visual_odom',
+            description='Topic name used by the optional RGB-D visual odometry node.',
         ),
         include_rtabmap,
     ])

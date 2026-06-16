@@ -1,6 +1,7 @@
 import os
 
 from ament_index_python.packages import get_package_share_directory
+from nav2_common.launch import RewrittenYaml
 
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, RegisterEventHandler
@@ -14,6 +15,7 @@ from launch.substitutions import (
     PythonExpression,
 )
 from launch_ros.actions import Node
+from launch_ros.descriptions import ParameterFile
 
 
 def generate_launch_description():
@@ -23,11 +25,31 @@ def generate_launch_description():
         package_share, 'config', 'epos4_diffdrive', 'ros2_controllers.yaml'
     )
     twist_mux_params = os.path.join(package_share, 'config', 'twist_mux.yaml')
+    ekf_params_file = os.path.join(package_share, 'config', 'ekf_gyro.yaml')
 
     can_interface_name = LaunchConfiguration('can_interface_name')
     use_twist_mux = LaunchConfiguration('use_twist_mux')
     start_controllers = LaunchConfiguration('start_controllers')
     start_joint_state_broadcaster = LaunchConfiguration('start_joint_state_broadcaster')
+    enable_imu_ekf = LaunchConfiguration('enable_imu_ekf')
+    imu_topic = LaunchConfiguration('imu_topic')
+    odom_input_topic = LaunchConfiguration('odom_input_topic')
+    wheel_separation_multiplier = LaunchConfiguration('wheel_separation_multiplier')
+    left_wheel_radius_multiplier = LaunchConfiguration('left_wheel_radius_multiplier')
+    right_wheel_radius_multiplier = LaunchConfiguration('right_wheel_radius_multiplier')
+
+    configured_controllers = ParameterFile(
+        RewrittenYaml(
+            source_file=controllers_file,
+            param_rewrites={
+                'wheel_separation_multiplier': wheel_separation_multiplier,
+                'left_wheel_radius_multiplier': left_wheel_radius_multiplier,
+                'right_wheel_radius_multiplier': right_wheel_radius_multiplier,
+            },
+            convert_types=True,
+        ),
+        allow_substs=True,
+    )
 
     robot_description_content = Command(
         [
@@ -44,7 +66,7 @@ def generate_launch_description():
     control_node = Node(
         package='controller_manager',
         executable='ros2_control_node',
-        parameters=[robot_description, controllers_file],
+        parameters=[robot_description, configured_controllers],
         output='screen',
     )
 
@@ -53,6 +75,22 @@ def generate_launch_description():
         executable='robot_state_publisher',
         parameters=[robot_description],
         output='screen',
+    )
+
+    ekf_filter_node = Node(
+        package='robot_localization',
+        executable='ekf_node',
+        name='ekf_filter_node',
+        output='screen',
+        parameters=[
+            ekf_params_file,
+            {
+                'use_sim_time': False,
+                'imu0': imu_topic,
+                'odom0': odom_input_topic,
+            },
+        ],
+        condition=IfCondition(enable_imu_ekf),
     )
 
     twist_mux = Node(
@@ -178,8 +216,39 @@ def generate_launch_description():
             default_value='true',
             description='Spawn joint_state_broadcaster alongside the diff drive controller.',
         ),
+        DeclareLaunchArgument(
+            'enable_imu_ekf',
+            default_value='true',
+            description='Start robot_localization EKF to fuse wheel odometry with RealSense gyro yaw rate.',
+        ),
+        DeclareLaunchArgument(
+            'imu_topic',
+            default_value='/camera/camera/imu',
+            description='Raw RealSense IMU topic fused into /odometry/filtered by the EKF.',
+        ),
+        DeclareLaunchArgument(
+            'odom_input_topic',
+            default_value='/diff_cont/odom',
+            description='Raw wheel odometry input topic fused by the EKF.',
+        ),
+        DeclareLaunchArgument(
+            'wheel_separation_multiplier',
+            default_value='1.0265',
+            description='Calibration multiplier for differential-drive wheel separation. Primarily affects turn-angle accuracy.',
+        ),
+        DeclareLaunchArgument(
+            'left_wheel_radius_multiplier',
+            default_value='1.055',
+            description='Calibration multiplier for the left wheel radius. Use the same value on both sides for average straight-distance calibration.',
+        ),
+        DeclareLaunchArgument(
+            'right_wheel_radius_multiplier',
+            default_value='1.055',
+            description='Calibration multiplier for the right wheel radius. Adjust asymmetrically only for persistent left/right drift.',
+        ),
         control_node,
         robot_state_publisher,
+        ekf_filter_node,
         twist_mux,
         twist_to_stamped_from_mux,
         twist_to_stamped_direct,

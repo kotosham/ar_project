@@ -4,7 +4,7 @@
     <xacro:include filename="inertial_macros.xacro"/>
 
     <xacro:property name="chassis_mass" value="0.7"/>
-    <xacro:property name="wheel_radius" value="0.039"/>
+    <xacro:property name="wheel_radius" value="0.038"/>
     <xacro:property name="wheel_thickness" value="0.033"/>
     <xacro:property name="wheel_mass" value="0.01"/>
     <xacro:property name="chassis_length" value="0.36"/>
@@ -15,12 +15,12 @@
     <xacro:property name="chassis_center_x" value="0.095"/>
     <xacro:property name="chassis_center_z" value="${chassis_bottom_from_floor + chassis_height/2 - wheel_radius}"/>
     <xacro:property name="rear_wheel_offset_x" value="0.0"/>
-    <xacro:property name="front_wheel_offset_x" value="0.19"/>
     <xacro:property name="wheel_offset_y" value="0.1745"/>
     <xacro:property name="wheel_offset_z" value="0"/>
-    <!-- Camera lies on top of the chassis, front face aligned with the front wall. -->
-    <xacro:property name="camera_mount_x" value="0.1675"/>
-    <xacro:property name="camera_mount_z" value="0.0275"/>
+    <!-- Real camera is mounted on a bracket, shifted forward and raised above the chassis roof. -->
+    <xacro:property name="camera_mount_x" value="0.2015"/>
+    <xacro:property name="camera_mount_z" value="0.0450"/>
+    <xacro:property name="caster_wheel_offset_x" value="${camera_mount_x}"/>
 
     <material name="white">
         <color rgba="1 1 1 1"/>
@@ -151,15 +151,15 @@
         <material>Gazebo/Blue</material>
     </gazebo>
 
-    <!-- FRONT LEFT PASSIVE WHEEL LINK -->
+    <!-- FRONT CENTER CASTER WHEEL LINK -->
 
-    <joint name="front_left_wheel_joint" type="fixed">
+    <joint name="caster_wheel_joint" type="fixed">
         <parent link="base_link"/>
-        <child link="front_left_wheel"/>
-        <origin xyz="${front_wheel_offset_x} ${wheel_offset_y} 0" rpy="-${pi/2} 0 0"/>
+        <child link="caster_wheel"/>
+        <origin xyz="${caster_wheel_offset_x} 0 0" rpy="-${pi/2} 0 0"/>
     </joint>
 
-    <link name="front_left_wheel">
+    <link name="caster_wheel">
         <visual>
             <geometry>
                 <cylinder radius="${wheel_radius}" length="${wheel_thickness}"/>
@@ -176,36 +176,7 @@
         </xacro:inertial_cylinder>
     </link>
 
-    <gazebo reference="front_left_wheel">
-        <material>Gazebo/Blue</material>
-    </gazebo>
-
-    <!-- FRONT RIGHT PASSIVE WHEEL LINK -->
-
-    <joint name="front_right_wheel_joint" type="fixed">
-        <parent link="base_link"/>
-        <child link="front_right_wheel"/>
-        <origin xyz="${front_wheel_offset_x} ${-wheel_offset_y} 0" rpy="${pi/2} 0 0"/>
-    </joint>
-
-    <link name="front_right_wheel">
-        <visual>
-            <geometry>
-                <cylinder radius="${wheel_radius}" length="${wheel_thickness}"/>
-            </geometry>
-            <material name="blue"/>
-        </visual>
-        <collision>
-            <geometry>
-                <cylinder radius="${wheel_radius}" length="${wheel_thickness}"/>
-            </geometry>
-        </collision>
-        <xacro:inertial_cylinder mass="${wheel_mass}" length="${wheel_thickness}" radius="${wheel_radius}">
-            <origin xyz="0 0 0" rpy="0 0 0"/>
-        </xacro:inertial_cylinder>
-    </link>
-
-    <gazebo reference="front_right_wheel">
+    <gazebo reference="caster_wheel">
         <material>Gazebo/Blue</material>
     </gazebo>
 </robot>
