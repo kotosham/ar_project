@@ -14,6 +14,7 @@ from geometry_msgs.msg import PointStamped, PoseStamped, Quaternion
 from rclpy.duration import Duration
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
+from rclpy.time import Time
 from sensor_msgs.msg import CameraInfo, Image
 from std_msgs.msg import Bool, Float32, String
 
@@ -30,6 +31,7 @@ class TargetPixelToGoal(Node):
         self.declare_parameter('target_point_topic', '/experiment/target_point')
         self.declare_parameter('prompt_topic', '/target_prompt')
         self.declare_parameter('goal_locked_topic', '/target_goal_locked')
+        self.declare_parameter('prompt_ack_topic', '/target_prompt_ack')
         self.declare_parameter('nav_status_topic', '/navigate_to_pose/_action/status')
         self.declare_parameter('fd_auto_topic', '/experiment/fd_auto')
         self.declare_parameter('target_frame', 'map')
@@ -40,8 +42,10 @@ class TargetPixelToGoal(Node):
         self.declare_parameter('max_depth_m', 6.0)
         self.declare_parameter('min_goal_update_distance', 0.15)
         self.declare_parameter('min_goal_update_angle', 0.2)
+        self.declare_parameter('max_target_pixel_age_s', 1.5)
         self.declare_parameter('lock_goal_on_publish', True)
-        self.declare_parameter('required_stable_detections', 3)
+        self.declare_parameter('final_approach_freeze_distance', 0.60)
+        self.declare_parameter('required_stable_detections', 2)
         self.declare_parameter('stable_pixel_tolerance', 40.0)
         self.declare_parameter('front_robot_x', 0.275)
         self.declare_parameter('front_robot_y', 0.0)
@@ -59,6 +63,7 @@ class TargetPixelToGoal(Node):
         self.target_point_topic = self.get_parameter('target_point_topic').value
         self.prompt_topic = self.get_parameter('prompt_topic').value
         self.goal_locked_topic = self.get_parameter('goal_locked_topic').value
+        self.prompt_ack_topic = self.get_parameter('prompt_ack_topic').value
         self.nav_status_topic = self.get_parameter('nav_status_topic').value
         self.fd_auto_topic = self.get_parameter('fd_auto_topic').value
         self.target_frame = self.get_parameter('target_frame').value
@@ -69,7 +74,9 @@ class TargetPixelToGoal(Node):
         self.max_depth_m = float(self.get_parameter('max_depth_m').value)
         self.min_goal_update_distance = float(self.get_parameter('min_goal_update_distance').value)
         self.min_goal_update_angle = float(self.get_parameter('min_goal_update_angle').value)
+        self.max_target_pixel_age_s = float(self.get_parameter('max_target_pixel_age_s').value)
         self.lock_goal_on_publish = bool(self.get_parameter('lock_goal_on_publish').value)
+        self.final_approach_freeze_distance = float(self.get_parameter('final_approach_freeze_distance').value)
         self.required_stable_detections = max(1, int(self.get_parameter('required_stable_detections').value))
         self.stable_pixel_tolerance = float(self.get_parameter('stable_pixel_tolerance').value)
         self.front_robot_x = float(self.get_parameter('front_robot_x').value)
@@ -88,7 +95,7 @@ class TargetPixelToGoal(Node):
         self.cy = None
         self.depth_buffer = deque(maxlen=30)
         self.mask_buffer = deque(maxlen=30)
-        self.pending_pixel_msgs = deque(maxlen=10)
+        self.pending_pixel_msgs = deque(maxlen=1)
         self.last_goal = None
         self.goal_locked = False
         self.current_prompt = None
@@ -106,7 +113,11 @@ class TargetPixelToGoal(Node):
         self.goal_pub = self.create_publisher(PoseStamped, self.goal_topic, 10)
         self.target_point_pub = self.create_publisher(PointStamped, self.target_point_topic, 10)
         self.goal_locked_pub = self.create_publisher(Bool, self.goal_locked_topic, latched_state_qos)
+        self.prompt_ack_pub = self.create_publisher(String, self.prompt_ack_topic, latched_state_qos)
         self.fd_auto_pub = self.create_publisher(Float32, self.fd_auto_topic, 10)
+        tracking_input_qos = QoSProfile(depth=1)
+        tracking_input_qos.reliability = ReliabilityPolicy.BEST_EFFORT
+        tracking_input_qos.durability = DurabilityPolicy.VOLATILE
         self.camera_info_sub = self.create_subscription(CameraInfo, self.camera_info_topic, self.camera_info_callback, 1)
         self.depth_sub = self.create_subscription(
             Image,
@@ -114,8 +125,18 @@ class TargetPixelToGoal(Node):
             self.depth_callback,
             rclpy.qos.QoSPresetProfiles.SENSOR_DATA.value,
         )
-        self.mask_sub = self.create_subscription(Image, self.target_mask_topic, self.target_mask_callback, 10)
-        self.pixel_sub = self.create_subscription(PointStamped, self.target_pixel_topic, self.target_pixel_callback, 10)
+        self.mask_sub = self.create_subscription(
+            Image,
+            self.target_mask_topic,
+            self.target_mask_callback,
+            tracking_input_qos,
+        )
+        self.pixel_sub = self.create_subscription(
+            PointStamped,
+            self.target_pixel_topic,
+            self.target_pixel_callback,
+            tracking_input_qos,
+        )
         self.prompt_sub = self.create_subscription(String, self.prompt_topic, self.prompt_callback, 10)
         self.nav_status_sub = self.create_subscription(
             GoalStatusArray,
@@ -128,14 +149,17 @@ class TargetPixelToGoal(Node):
         self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
 
         self.get_logger().info(
-            f'Bridging {self.target_pixel_topic} + local depth -> {self.goal_topic} '
-            f'using depth topic {self.depth_topic}; '
+            f'Bridging {self.target_pixel_topic} -> {self.goal_topic} '
+            f'using embedded point.z depth when available, otherwise falling back to local depth topic {self.depth_topic}; '
             f'approach_offset={self.approach_offset:.2f}m, '
+            f'max_target_pixel_age_s={self.max_target_pixel_age_s:.2f}s, '
             f'lock_goal_on_publish={self.lock_goal_on_publish}, '
+            f'final_approach_freeze_distance={self.final_approach_freeze_distance:.2f}m, '
             f'required_stable_detections={self.required_stable_detections}, '
             f'fd_auto_topic={self.fd_auto_topic}'
         )
         self._publish_goal_locked(False)
+        self._publish_prompt_ack('')
 
     def camera_info_callback(self, msg):
         if self.fx is None:
@@ -164,6 +188,7 @@ class TargetPixelToGoal(Node):
         self.fd_auto_reported_for_current_goal = False
         self.current_goal_status_min_ns = 0
         self._publish_goal_locked(False)
+        self._publish_prompt_ack(self.current_prompt)
         self.get_logger().info(
             f'New prompt received on bridge: "{self.current_prompt}". '
             f'Cleared locked goal and stability history.'
@@ -218,7 +243,7 @@ class TargetPixelToGoal(Node):
         self._process_pending_pixels()
 
     def target_pixel_callback(self, msg):
-        if self.goal_locked and self.lock_goal_on_publish:
+        if self.goal_locked:
             return
 
         if not self._update_stability(msg):
@@ -233,66 +258,102 @@ class TargetPixelToGoal(Node):
         self._process_pending_pixels()
 
     def _process_pending_pixels(self):
-        if self.fx is None or not self.depth_buffer or not self.pending_pixel_msgs:
+        if self.fx is None or not self.pending_pixel_msgs:
             return
 
         remaining = deque(maxlen=self.pending_pixel_msgs.maxlen)
         while self.pending_pixel_msgs:
             entry = self.pending_pixel_msgs.popleft()
             msg = entry['msg']
-            target_stamp_ns = self._stamp_to_ns(msg.header.stamp)
-            depth_frame = self._find_matching_depth_frame(target_stamp_ns)
-            if depth_frame is None:
-                if (time.monotonic() - entry['received_monotonic']) < self.pending_mask_wait_s:
+            embedded_depth_m = self._extract_embedded_depth(msg)
+            depth_frame = None
+            mask_frame = None
+
+            if embedded_depth_m is None:
+                target_stamp_ns = self._stamp_to_ns(msg.header.stamp)
+                depth_frame = self._find_matching_depth_frame(target_stamp_ns)
+                if depth_frame is None:
+                    if (time.monotonic() - entry['received_monotonic']) < self.pending_mask_wait_s:
+                        remaining.append(entry)
+                    else:
+                        self.get_logger().warn('No matching depth frame found for target pixel')
+                    continue
+
+                mask_frame = self._find_matching_mask_frame(target_stamp_ns)
+                if (
+                    mask_frame is None
+                    and self.lock_goal_on_publish
+                    and (time.monotonic() - entry['received_monotonic']) < self.pending_mask_wait_s
+                ):
                     remaining.append(entry)
-                else:
-                    self.get_logger().warn('No matching depth frame found for target pixel')
+                    continue
+
+            if not self._process_target_pixel_message(msg, depth_frame, mask_frame, embedded_depth_m):
                 continue
 
-            mask_frame = self._find_matching_mask_frame(target_stamp_ns)
-            if mask_frame is None and (time.monotonic() - entry['received_monotonic']) < self.pending_mask_wait_s:
-                remaining.append(entry)
-                continue
-
-            if not self._process_target_pixel_message(msg, depth_frame, mask_frame):
-                continue
-
-            if self.goal_locked and self.lock_goal_on_publish:
+            if self.goal_locked:
                 remaining.clear()
                 self.pending_pixel_msgs.clear()
                 break
 
         self.pending_pixel_msgs = remaining
 
-    def _process_target_pixel_message(self, msg, depth_frame, mask_frame):
+    def _process_target_pixel_message(self, msg, depth_frame, mask_frame, embedded_depth_m):
+        target_stamp_ns = self._stamp_to_ns(msg.header.stamp)
+        if self.max_target_pixel_age_s > 0.0:
+            now_ns = self.get_clock().now().nanoseconds
+            pixel_age_s = (now_ns - target_stamp_ns) / 1e9
+            if pixel_age_s > self.max_target_pixel_age_s:
+                self.get_logger().warn(
+                    f'Dropping stale target pixel aged {pixel_age_s:.3f}s '
+                    f'(limit {self.max_target_pixel_age_s:.3f}s).'
+                )
+                return False
+
         u_center = int(round(msg.point.x))
         v_center = int(round(msg.point.y))
-        if not (0 <= u_center < depth_frame['width'] and 0 <= v_center < depth_frame['height']):
-            self.get_logger().warn(f'Target pixel out of bounds: ({u_center}, {v_center})')
-            return False
+        if embedded_depth_m is not None:
+            u = u_center
+            v = v_center
+            depth_m = float(embedded_depth_m)
+            source_frame_id = msg.header.frame_id
+            source_stamp = msg.header.stamp
+            if not source_frame_id:
+                self.get_logger().warn('Embedded-depth target pixel is missing header.frame_id.')
+                return False
+        else:
+            if not (0 <= u_center < depth_frame['width'] and 0 <= v_center < depth_frame['height']):
+                self.get_logger().warn(f'Target pixel out of bounds: ({u_center}, {v_center})')
+                return False
 
-        u, v = self._select_depth_pixel(u_center, v_center, depth_frame, mask_frame)
-        depth_m = float(depth_frame['depth'][v, u])
-        if not math.isfinite(depth_m) or depth_m < self.min_depth_m or depth_m > self.max_depth_m:
-            self.get_logger().warn(f'Invalid depth at target pixel ({u}, {v}): {depth_m:.3f} m')
-            return False
+            u, v = self._select_depth_pixel(u_center, v_center, depth_frame, mask_frame)
+            depth_m = float(depth_frame['depth'][v, u])
+            if not math.isfinite(depth_m) or depth_m < self.min_depth_m or depth_m > self.max_depth_m:
+                self.get_logger().warn(f'Invalid depth at target pixel ({u}, {v}): {depth_m:.3f} m')
+                return False
+            source_frame_id = depth_frame['frame_id']
+            source_stamp = depth_frame['stamp']
 
         x = (u - self.cx) * depth_m / self.fx
         y = (v - self.cy) * depth_m / self.fy
         z = depth_m
 
         point_stamped = PointStamped()
-        point_stamped.header.frame_id = depth_frame['frame_id']
-        point_stamped.header.stamp = depth_frame['stamp']
+        point_stamped.header.frame_id = source_frame_id
+        point_stamped.header.stamp = source_stamp
         point_stamped.point.x = float(x)
         point_stamped.point.y = float(y)
         point_stamped.point.z = float(z)
 
         try:
+            frame_time = Time(
+                seconds=int(source_stamp.sec),
+                nanoseconds=int(source_stamp.nanosec),
+            )
             transform_point = self.tf_buffer.lookup_transform(
                 self.target_frame,
-                depth_frame['frame_id'],
-                rclpy.time.Time(),
+                source_frame_id,
+                frame_time,
                 timeout=Duration(seconds=0.2),
             )
             point_world = tf2_geometry_msgs.do_transform_point(point_stamped, transform_point)
@@ -312,6 +373,8 @@ class TargetPixelToGoal(Node):
         dx = point_world.point.x - robot_x
         dy = point_world.point.y - robot_y
         distance = math.hypot(dx, dy)
+        if self._should_freeze_final_approach(distance):
+            return False
 
         if distance <= self.approach_offset:
             goal_x = robot_x
@@ -341,15 +404,24 @@ class TargetPixelToGoal(Node):
             self._publish_goal_locked(True)
         self.get_logger().info(
             f'Published goal from target pixel ({u}, {v})'
-            f'{" using nearest mask depth" if mask_frame is not None else ""}: '
+            f'{" using embedded depth" if embedded_depth_m is not None else ""}'
+            f'{" using nearest mask depth" if embedded_depth_m is None and mask_frame is not None else ""}: '
             f'depth={depth_m:.2f}m goal=({goal_x:.2f}, {goal_y:.2f}) yaw={yaw:.2f}rad'
         )
         if self.goal_locked:
             self.get_logger().info('Goal locked for static-object experiment. Ignoring further pixel updates until a new prompt arrives.')
         return True
 
+    def _extract_embedded_depth(self, msg):
+        depth_m = float(msg.point.z)
+        if not math.isfinite(depth_m):
+            return None
+        if depth_m < self.min_depth_m or depth_m > self.max_depth_m:
+            return None
+        return depth_m
+
     def nav_status_callback(self, msg):
-        if not self.goal_locked or self.fd_auto_reported_for_current_goal:
+        if self.last_goal is None or self.current_goal_status_min_ns == 0:
             return
 
         latest_terminal = None
@@ -363,6 +435,17 @@ class TargetPixelToGoal(Node):
                 latest_terminal = (status_stamp_ns, status.status)
 
         if latest_terminal is None or latest_terminal[1] != 4:
+            return
+
+        if not self.goal_locked:
+            self.goal_locked = True
+            self._publish_goal_locked(True)
+            self.get_logger().info(
+                'Navigation goal succeeded. Locking target updates and stopping tracking '
+                'until the next prompt arrives.'
+            )
+
+        if self.fd_auto_reported_for_current_goal:
             return
 
         fd_auto = self._compute_fd_auto_from_latest_depth()
@@ -588,10 +671,34 @@ class TargetPixelToGoal(Node):
         yaw_delta = abs(math.atan2(math.sin(yaw - last_yaw), math.cos(yaw - last_yaw)))
         return distance_delta >= self.min_goal_update_distance or yaw_delta >= self.min_goal_update_angle
 
+    def _should_freeze_final_approach(self, observed_target_distance):
+        if self.lock_goal_on_publish or self.final_approach_freeze_distance <= 0.0:
+            return False
+
+        if self.goal_locked or self.last_goal is None:
+            return False
+
+        if observed_target_distance > self.final_approach_freeze_distance:
+            return False
+
+        self.goal_locked = True
+        self._publish_goal_locked(True)
+        self.get_logger().info(
+            'Entered final approach zone. Freezing goal updates and stopping tracking '
+            f'because observed target distance is {observed_target_distance:.2f}m '
+            f'(threshold {self.final_approach_freeze_distance:.2f}m).'
+        )
+        return True
+
     def _publish_goal_locked(self, locked):
         msg = Bool()
         msg.data = bool(locked)
         self.goal_locked_pub.publish(msg)
+
+    def _publish_prompt_ack(self, prompt):
+        msg = String()
+        msg.data = str(prompt)
+        self.prompt_ack_pub.publish(msg)
 
     @staticmethod
     def _yaw_to_quaternion(yaw):

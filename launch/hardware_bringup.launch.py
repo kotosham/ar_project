@@ -4,9 +4,10 @@ from ament_index_python.packages import get_package_share_directory
 from nav2_common.launch import RewrittenYaml
 
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, RegisterEventHandler
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, RegisterEventHandler
 from launch.conditions import IfCondition
 from launch.event_handlers import OnProcessExit
+from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import (
     Command,
     FindExecutable,
@@ -25,14 +26,18 @@ def generate_launch_description():
         package_share, 'config', 'epos4_diffdrive', 'ros2_controllers.yaml'
     )
     twist_mux_params = os.path.join(package_share, 'config', 'twist_mux.yaml')
-    ekf_params_file = os.path.join(package_share, 'config', 'ekf_gyro.yaml')
+    ekf_params_file_raw_imu = os.path.join(package_share, 'config', 'ekf_gyro.yaml')
+    ekf_params_file_filtered_imu = os.path.join(package_share, 'config', 'ekf_imu_filtered.yaml')
+    imu_filter_launch_file = os.path.join(package_share, 'launch', 'imu_orientation_filter.launch.py')
 
     can_interface_name = LaunchConfiguration('can_interface_name')
     use_twist_mux = LaunchConfiguration('use_twist_mux')
     start_controllers = LaunchConfiguration('start_controllers')
     start_joint_state_broadcaster = LaunchConfiguration('start_joint_state_broadcaster')
     enable_imu_ekf = LaunchConfiguration('enable_imu_ekf')
+    enable_imu_orientation_filter = LaunchConfiguration('enable_imu_orientation_filter')
     imu_topic = LaunchConfiguration('imu_topic')
+    filtered_imu_topic = LaunchConfiguration('filtered_imu_topic')
     odom_input_topic = LaunchConfiguration('odom_input_topic')
     wheel_separation_multiplier = LaunchConfiguration('wheel_separation_multiplier')
     left_wheel_radius_multiplier = LaunchConfiguration('left_wheel_radius_multiplier')
@@ -77,20 +82,53 @@ def generate_launch_description():
         output='screen',
     )
 
-    ekf_filter_node = Node(
+    imu_orientation_filter = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(imu_filter_launch_file),
+        launch_arguments={
+            'raw_imu_topic': imu_topic,
+            'filtered_imu_topic': filtered_imu_topic,
+        }.items(),
+        condition=IfCondition(enable_imu_orientation_filter),
+    )
+
+    ekf_filter_node_raw_imu = Node(
         package='robot_localization',
         executable='ekf_node',
         name='ekf_filter_node',
         output='screen',
         parameters=[
-            ekf_params_file,
+            ekf_params_file_raw_imu,
             {
                 'use_sim_time': False,
                 'imu0': imu_topic,
                 'odom0': odom_input_topic,
             },
         ],
-        condition=IfCondition(enable_imu_ekf),
+        condition=IfCondition(
+            PythonExpression(
+                ["'", enable_imu_ekf, "' == 'true' and '", enable_imu_orientation_filter, "' != 'true'"]
+            )
+        ),
+    )
+
+    ekf_filter_node_filtered_imu = Node(
+        package='robot_localization',
+        executable='ekf_node',
+        name='ekf_filter_node',
+        output='screen',
+        parameters=[
+            ekf_params_file_filtered_imu,
+            {
+                'use_sim_time': False,
+                'imu0': filtered_imu_topic,
+                'odom0': odom_input_topic,
+            },
+        ],
+        condition=IfCondition(
+            PythonExpression(
+                ["'", enable_imu_ekf, "' == 'true' and '", enable_imu_orientation_filter, "' == 'true'"]
+            )
+        ),
     )
 
     twist_mux = Node(
@@ -222,9 +260,19 @@ def generate_launch_description():
             description='Start robot_localization EKF to fuse wheel odometry with RealSense gyro yaw rate.',
         ),
         DeclareLaunchArgument(
+            'enable_imu_orientation_filter',
+            default_value='true',
+            description='Run imu_filter_madgwick on the RealSense IMU and feed filtered yaw + yaw rate into the EKF.',
+        ),
+        DeclareLaunchArgument(
             'imu_topic',
             default_value='/camera/camera/imu',
-            description='Raw RealSense IMU topic fused into /odometry/filtered by the EKF.',
+            description='Raw RealSense IMU topic. Used directly by EKF when IMU orientation filtering is disabled.',
+        ),
+        DeclareLaunchArgument(
+            'filtered_imu_topic',
+            default_value='/camera/camera/imu/data',
+            description='Filtered IMU topic published by imu_filter_madgwick and consumed by the EKF when filtering is enabled.',
         ),
         DeclareLaunchArgument(
             'odom_input_topic',
@@ -233,22 +281,24 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             'wheel_separation_multiplier',
-            default_value='1.0265',
+            default_value='1.0052',
             description='Calibration multiplier for differential-drive wheel separation. Primarily affects turn-angle accuracy.',
         ),
         DeclareLaunchArgument(
             'left_wheel_radius_multiplier',
-            default_value='1.055',
+            default_value='1.0249',
             description='Calibration multiplier for the left wheel radius. Use the same value on both sides for average straight-distance calibration.',
         ),
         DeclareLaunchArgument(
             'right_wheel_radius_multiplier',
-            default_value='1.055',
+            default_value='1.0249',
             description='Calibration multiplier for the right wheel radius. Adjust asymmetrically only for persistent left/right drift.',
         ),
         control_node,
         robot_state_publisher,
-        ekf_filter_node,
+        imu_orientation_filter,
+        ekf_filter_node_raw_imu,
+        ekf_filter_node_filtered_imu,
         twist_mux,
         twist_to_stamped_from_mux,
         twist_to_stamped_direct,

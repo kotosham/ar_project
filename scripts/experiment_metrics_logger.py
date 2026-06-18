@@ -11,6 +11,7 @@ from action_msgs.msg import GoalStatusArray
 from geometry_msgs.msg import PointStamped, PoseStamped
 from rclpy.duration import Duration
 from rclpy.node import Node
+from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from std_msgs.msg import Float32, String
 import tf2_geometry_msgs
 import tf2_ros
@@ -22,6 +23,7 @@ class ExperimentMetricsLogger(Node):
 
         self.declare_parameter('prompt_topic', '/target_prompt')
         self.declare_parameter('target_pixel_topic', '/target_pixel')
+        self.declare_parameter('cv_runtime_topic', '/experiment/cv_runtime')
         self.declare_parameter('goal_topic', '/goal_pose')
         self.declare_parameter('target_point_topic', '/experiment/target_point')
         self.declare_parameter('fd_auto_topic', '/experiment/fd_auto')
@@ -37,6 +39,7 @@ class ExperimentMetricsLogger(Node):
 
         self.prompt_topic = str(self.get_parameter('prompt_topic').value)
         self.target_pixel_topic = str(self.get_parameter('target_pixel_topic').value)
+        self.cv_runtime_topic = str(self.get_parameter('cv_runtime_topic').value)
         self.goal_topic = str(self.get_parameter('goal_topic').value)
         self.target_point_topic = str(self.get_parameter('target_point_topic').value)
         self.fd_auto_topic = str(self.get_parameter('fd_auto_topic').value)
@@ -69,14 +72,24 @@ class ExperimentMetricsLogger(Node):
         self.current_trial = None
         self.next_trial_id = self._load_next_trial_id()
 
+        tracking_input_qos = QoSProfile(depth=1)
+        tracking_input_qos.reliability = ReliabilityPolicy.BEST_EFFORT
+        tracking_input_qos.durability = DurabilityPolicy.VOLATILE
+
         self.prompt_sub = self.create_subscription(String, self.prompt_topic, self.prompt_callback, 10)
         self.target_pixel_sub = self.create_subscription(
             PointStamped,
             self.target_pixel_topic,
             self.target_pixel_callback,
-            10,
+            tracking_input_qos,
         )
         self.goal_sub = self.create_subscription(PoseStamped, self.goal_topic, self.goal_callback, 10)
+        self.cv_runtime_sub = self.create_subscription(
+            Float32,
+            self.cv_runtime_topic,
+            self.cv_runtime_callback,
+            10,
+        )
         self.target_point_sub = self.create_subscription(
             PointStamped,
             self.target_point_topic,
@@ -121,12 +134,15 @@ class ExperimentMetricsLogger(Node):
             'start_monotonic': now_monotonic,
             'start_ros_ns': self._now_ros_ns(),
             'target_pixel_monotonic': None,
+            'cv_runtime_s': None,
             'goal_monotonic': None,
             'fd_auto_m': None,
             'target_point': None,
             'pending_outcome': None,
             'pending_end_monotonic': None,
             'fd_auto_wait_deadline_monotonic': None,
+            'current_goal_status_min_ns': 0,
+            'goal_publish_count': 0,
         }
         self.next_trial_id += 1
 
@@ -148,9 +164,22 @@ class ExperimentMetricsLogger(Node):
                 f'cv_runtime_s={cv_runtime:.3f}.'
             )
 
+    def cv_runtime_callback(self, msg):
+        if self.current_trial is None:
+            return
+
+        self.current_trial['cv_runtime_s'] = float(msg.data)
+
     def goal_callback(self, _msg):
         if self.current_trial is None:
             return
+
+        goal_stamp_ns = self._stamp_to_ns(_msg.header.stamp)
+        if goal_stamp_ns == 0:
+            goal_stamp_ns = self._now_ros_ns()
+
+        self.current_trial['current_goal_status_min_ns'] = goal_stamp_ns
+        self.current_trial['goal_publish_count'] += 1
 
         if self.current_trial['goal_monotonic'] is None:
             self.current_trial['goal_monotonic'] = time.monotonic()
@@ -159,6 +188,12 @@ class ExperimentMetricsLogger(Node):
                 f'Trial {self.current_trial["trial_id"]}: goal published, '
                 f'goal_publish_latency_s={goal_latency:.3f}.'
             )
+            return
+
+        self.get_logger().info(
+            f'Trial {self.current_trial["trial_id"]}: updated goal published '
+            f'(count={self.current_trial["goal_publish_count"]}).'
+        )
 
     def target_point_callback(self, msg):
         if self.current_trial is None:
@@ -185,12 +220,15 @@ class ExperimentMetricsLogger(Node):
         if self.current_trial is None or self.current_trial['goal_monotonic'] is None:
             return
 
-        trial_start_ros_ns = self.current_trial['start_ros_ns']
+        current_goal_status_min_ns = self.current_trial.get('current_goal_status_min_ns', 0)
+        if current_goal_status_min_ns == 0:
+            return
+
         latest_terminal = None
 
         for status in msg.status_list:
             status_stamp_ns = self._stamp_to_ns(status.goal_info.stamp)
-            if status_stamp_ns != 0 and status_stamp_ns < trial_start_ros_ns:
+            if status_stamp_ns == 0 or status_stamp_ns < current_goal_status_min_ns:
                 continue
 
             if status.status in (4, 5, 6):
@@ -260,7 +298,11 @@ class ExperimentMetricsLogger(Node):
             'trial_id': self.current_trial['trial_id'],
             'prompt': self.current_trial['prompt'],
             'prompt_time_iso': self.current_trial['prompt_time_iso'],
-            'cv_runtime_s': self._format_duration(target_pixel - start if target_pixel is not None else None),
+            'cv_runtime_s': self._format_duration(
+                self.current_trial.get('cv_runtime_s')
+                if self.current_trial.get('cv_runtime_s') is not None
+                else (target_pixel - start if target_pixel is not None else None)
+            ),
             'goal_publish_latency_s': self._format_duration(goal_time - start if goal_time is not None else None),
             'trial_duration_s': self._format_duration(end_monotonic - start),
             'total_time_to_object_s': self._format_duration(end_monotonic - start if outcome == 'succeeded' else None),

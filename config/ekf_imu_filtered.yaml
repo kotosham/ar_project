@@ -1,0 +1,57 @@
+ekf_filter_node:
+  ros__parameters:
+    frequency: 20.0
+    sensor_timeout: 0.2
+    two_d_mode: true
+    transform_time_offset: 0.0
+    transform_timeout: 0.1
+    publish_tf: true
+    publish_acceleration: false
+    permit_corrected_publication: true
+
+    map_frame: map
+    odom_frame: odom
+    base_link_frame: base_link
+    world_frame: odom
+
+    odom0: /diff_cont/odom
+    odom0_config: [true, true, false,
+                   false, false, true,
+                   true, false, false,
+                   false, false, true,
+                   false, false, false]
+    odom0_differential: false
+    odom0_relative: false
+    odom0_queue_size: 10
+    odom0_nodelay: false
+
+    # Optional RGB-D visual odometry correction.
+    odom1: /visual_odom
+    odom1_config: [true, true, false,
+                   false, false, false,
+                   false, false, false,
+                   false, false, false,
+                   false, false, false]
+    odom1_differential: false
+    odom1_relative: false
+    odom1_queue_size: 2
+    odom1_nodelay: false
+    odom1_pose_rejection_threshold: 1.0
+
+    # Filtered D435i IMU fusion mode:
+    # use Madgwick orientation (yaw) plus angular velocity. As the camera has
+    # no magnetometer, the orientation is still only locally consistent, so we
+    # keep it relative and fuse only yaw-related terms in 2D mode.
+    imu0: /camera/camera/imu/data
+    imu0_config: [false, false, false,
+                  false, false, true,
+                  false, false, false,
+                  false, false, true,
+                  false, false, false]
+    imu0_differential: false
+    imu0_relative: true
+    imu0_queue_size: 30
+    imu0_nodelay: false
+    imu0_pose_rejection_threshold: 0.3
+    imu0_twist_rejection_threshold: 0.8
+    imu0_remove_gravitational_acceleration: false

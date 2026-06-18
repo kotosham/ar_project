@@ -110,9 +110,14 @@ class TrackerRgbBridge(Node):
 
     def prompt_callback(self, msg):
         if msg.data == self.current_prompt and self.subscription is not None:
-            self.get_logger().info(
-                f'Ignoring duplicate prompt "{msg.data}" while the current RGB burst is still active.'
-            )
+            if self.burst_frame_count > 0:
+                self.get_logger().info(
+                    f'Ignoring duplicate prompt "{msg.data}" while the current RGB burst is still active.'
+                )
+            else:
+                self.get_logger().info(
+                    f'Ignoring duplicate prompt "{msg.data}" while continuous RGB export is already active.'
+                )
             return
 
         self.current_prompt = msg.data
@@ -127,11 +132,16 @@ class TrackerRgbBridge(Node):
     def goal_locked_callback(self, msg):
         self.goal_locked = bool(msg.data)
         if self.goal_locked:
+            completed_prompt = self.current_prompt
             self.burst_frames_remaining = 0
+            self.current_prompt = None
             self._set_streaming_enabled(False, 'goal lock received')
-        elif self.current_prompt:
-            self.burst_frames_remaining = max(0, self.burst_frame_count)
-            self._set_streaming_enabled(True, f'goal lock cleared for prompt "{self.current_prompt}"')
+            if completed_prompt:
+                suffix = 'burst bridge state' if self.burst_frame_count > 0 else 'continuous bridge state'
+                self.get_logger().info(
+                    f'Completed prompt "{completed_prompt}" and cleared {suffix}. '
+                    'Waiting for the next prompt.'
+                )
 
     def _set_streaming_enabled(self, enabled, reason):
         if enabled and self.subscription is None:
@@ -149,7 +159,7 @@ class TrackerRgbBridge(Node):
                     f'Will publish up to {self.burst_frames_remaining} frame(s) in this burst.'
                 )
             else:
-                self.get_logger().info(f'Enabled tracker RGB export because {reason}.')
+                self.get_logger().info(f'Enabled continuous tracker RGB export because {reason}.')
         elif not enabled and self.subscription is not None:
             self.destroy_subscription(self.subscription)
             self.subscription = None

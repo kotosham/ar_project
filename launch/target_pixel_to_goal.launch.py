@@ -10,7 +10,7 @@ def generate_launch_description():
             DeclareLaunchArgument(
                 'target_pixel_topic',
                 default_value='/target_pixel',
-                description='Incoming target pixel topic from the laptop-side tracker.',
+                description='Incoming target point topic from the laptop-side tracker. x/y are pixel coordinates; z may optionally carry depth in meters for continuous mode.',
             ),
             DeclareLaunchArgument(
                 'target_mask_topic',
@@ -103,9 +103,19 @@ def generate_launch_description():
                 description='For static-object experiments, publish one goal and ignore future pixel updates until a new prompt arrives.',
             ),
             DeclareLaunchArgument(
+                'max_target_pixel_age_s',
+                default_value='1.5',
+                description='Drop target-pixel updates that are older than this many seconds by the time they reach the Raspberry Pi.',
+            ),
+            DeclareLaunchArgument(
+                'final_approach_freeze_distance',
+                default_value='0.60',
+                description='In continuous mode, stop accepting goal updates when the observed target gets this close to the robot and finish the final approach blindly.',
+            ),
+            DeclareLaunchArgument(
                 'required_stable_detections',
-                default_value='1',
-                description='How many target-pixel detections must arrive before the goal is accepted. For burst best-candidate mode, keep this at 1.',
+                default_value='2',
+                description='How many target-pixel detections must arrive before the goal is accepted. For burst best-candidate mode, override this back to 1.',
             ),
             DeclareLaunchArgument(
                 'stable_pixel_tolerance',
@@ -137,6 +147,8 @@ def generate_launch_description():
                         'fd_nearest_depth_band_m': LaunchConfiguration('fd_nearest_depth_band_m'),
                         'fd_lateral_limit_m': LaunchConfiguration('fd_lateral_limit_m'),
                         'lock_goal_on_publish': LaunchConfiguration('lock_goal_on_publish'),
+                        'max_target_pixel_age_s': LaunchConfiguration('max_target_pixel_age_s'),
+                        'final_approach_freeze_distance': LaunchConfiguration('final_approach_freeze_distance'),
                         'required_stable_detections': LaunchConfiguration('required_stable_detections'),
                         'stable_pixel_tolerance': LaunchConfiguration('stable_pixel_tolerance'),
                     }

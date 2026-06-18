@@ -17,6 +17,11 @@ def generate_launch_description():
             description='Timeout in seconds for one experiment trial.',
         ),
         DeclareLaunchArgument(
+            'cv_runtime_topic',
+            default_value='/experiment/cv_runtime',
+            description='Topic where the CV module publishes the running average inference time for the current trial.',
+        ),
+        DeclareLaunchArgument(
             'target_point_topic',
             default_value='/experiment/target_point',
             description='Topic where the selected 3D target point is published for automatic FD estimation.',
@@ -63,6 +68,7 @@ def generate_launch_description():
             parameters=[{
                 'output_csv': LaunchConfiguration('output_csv'),
                 'trial_timeout_s': LaunchConfiguration('trial_timeout_s'),
+                'cv_runtime_topic': LaunchConfiguration('cv_runtime_topic'),
                 'target_point_topic': LaunchConfiguration('target_point_topic'),
                 'fd_auto_topic': LaunchConfiguration('fd_auto_topic'),
                 'enable_fd_auto_measurement': LaunchConfiguration('enable_fd_auto_measurement'),
