@@ -1,6 +1,6 @@
 > **Поправки верификации (имеют приоритет над текстом ниже).**
 > - **`tc netem` НЕ работает на стоковом ядре WSL2** (нет модуля `sch_netem`) — ровно как `vcan`. Для инъекции деградации Wi-Fi нужен **пересобранный WSL2-ядро** с `CONFIG_NET_SCH_NETEM` (+`CONFIG_NET_CLS_*`), либо второй физический хост / не-WSL VM. Без этого сетевые FMEA-строки в WSL2 **невоспроизводимы** (в матрице ниже — «только с кастомным ядром»).
-> - **VRAM Qwen3-VL-30B-A3B:** FP16 ≈ 67 ГБ, **FP8 ≈ 33–34 ГБ** (комфортно на 80/48 ГБ, **тесно на 32 ГБ**, **не влезает в 24 ГБ**). На 24 ГБ dev-GPU реально только **4-битная** сборка (~17–23 ГБ) для коротких контекстов. Для sim предпочтителен **удалённый OpenAI-совместимый endpoint** или меньший dense-VLM.
+> - **VLM — внешний OpenAI-совместимый API, не self-hosted на edge.** Planner Orchestrator — лёгкий HTTP-клиент (`base_url`), GPU не требует; вопрос «влезает ли 30B в VRAM dev-машины» к системе **не относится**. Edge-GPU обслуживает только сегментацию (YOLOE/DINO+SAM) и SLAM (RTAB-Map). Кто хостит эндпоинт (отдельный сервер vLLM/SGLang или облако) — деталь развёртывания; для sim в `base_url` подставляется доступный эндпоинт.
 > - **GUI gz под WSLg:** идти через **XWayland (X11)**; при чёрном экране/краше OGRE2 — **снять `WAYLAND_DISPLAY`** и/или `LIBGL_ALWAYS_SOFTWARE=1`. Возможны утечка памяти WSLg и зависание при закрытии 3D-окна.
 > - **GPU-рендер сенсоров OGRE2 под WSL2 ненадёжен** (краши, чёрные кадры, откат на CPU). Симулированный RealSense RGB-D может не давать целевой FPS в WSL2 — валидировать на нативном Linux / edge-хосте.
 > - **gz `DiffDrive` ждёт `geometry_msgs/Twist`, а Nav2/`diff_drive_controller` (Jazzy) шлёт `TwistStamped`** — согласовать мостом / `use_stamped_vel`, иначе sim-робот не поедет.
@@ -93,17 +93,15 @@ candump vcan0   # из can-utils
 
 ### 5. GPU-нагрузки под WSL2 (CUDA-on-WSL2)
 
-На edge/PC под WSL2 запускаются vLLM (Qwen3-VL) и сегментационные модели (YOLOE / GroundingDINO+MobileSAM).
+**Важно: VLM — это внешний OpenAI-совместимый API; его НЕ хостим на edge/WSL2-боксе.** Planner Orchestrator — лёгкий async **HTTP-клиент** к этому эндпоинту (`base_url` + ключ), сам он GPU не требует. Кто и как поднимает эндпоинт (vLLM/SGLang на отдельной машине с достаточной VRAM, или облачный провайдер) — деталь развёртывания **вне** этой системы. Поэтому вопрос «влезает ли 30B в VRAM dev-машины» к роботу/симу **не относится**: при смене эндпоинта меняется только `base_url`.
+
+На edge-GPU под WSL2 запускаются **только локальные GPU-нагрузки**: сегментационные модели (YOLOE / GroundingDINO+MobileSAM) и SLAM (RTAB-Map). Именно их нужно обеспечить CUDA.
 
 **Драйвер и toolkit.** Под WSL2 CUDA-драйвер — это **Windows-драйвер NVIDIA**. Внутри Ubuntu-WSL **нельзя** ставить Linux-дисплей-драйвер: пакеты `cuda`, `cuda-drivers` из обычного репозитория тянут Linux-драйвер и ломают связку. Ставится только **WSL-specific CUDA toolkit** (вариант `Linux > x86_64 > WSL-Ubuntu` на сайте NVIDIA). Проверка: `nvidia-smi` внутри WSL должен видеть GPU.
 
-**VRAM и помещается ли 30B.** Qwen3-VL-30B-A3B — MoE с ~3B активных параметров; качество близко к dense-32B, но **по VRAM это всё равно ~30B весов** (активны 3B на токен, но в память грузятся все эксперты). В FP8 веса ~30 ГБ, рантайм-футпринт с активациями/KV-кэшем/оверхедом фреймворка — ~37–40 ГБ, что комфортно на одном H100 80 ГБ, но **не помещается** на потребительские 24 ГБ (RTX 4090/3090) даже в 4-битной квантизации с учётом vision-энкодера и KV-кэша. Требуется vLLM ≥ 0.11.0 (поддержка Qwen3-VL).
+**VRAM для локальных моделей.** Сегментация (YOLOE / DINO+MobileSAM) по VRAM скромная (единицы ГБ) и спокойно живёт на dev-GPU рядом с RTAB-Map. 30B-VLM на этой карте **не поднимаем** — он за API.
 
-**Fallback при нехватке VRAM (типично для dev-WSL2-машины):**
-- меньший VLM (например dense Qwen3-VL-8B/4B) локально, либо
-- удалённый **OpenAI-совместимый endpoint** — Planner Orchestrator уже спроектирован как async-клиент к OpenAI-совместимому API (single-in-flight, UUID-идемпотентность, timeout от измеренного p99, circuit-breaker, streaming, structured/enum tool-call). Для симуляции в `base_url` подставляется удалённый сервис вместо локального vLLM — остальной стек не меняется.
-
-Сегментация (YOLOE и др.) по VRAM скромная (единицы ГБ) и спокойно соседствует с маленьким VLM на одной карте; с 30B-VLM на 80 ГБ — тоже.
+**Эндпоинт VLM для sim/dev.** В `base_url` Planner Orchestrator подставляется любой доступный OpenAI-совместимый сервис: удалённый/облачный или self-hosted (например vLLM ≥ 0.11.0 с поддержкой Qwen3-VL на отдельном сервере). Остальной стек при смене эндпоинта не меняется. Для удешевления отладки допустимо временно указать меньшую модель — это конфиг (`base_url`/имя модели), а не изменение архитектуры.
 
 ### 6. GUI: WSLg vs headless gz
 
@@ -126,8 +124,8 @@ candump vcan0   # из can-utils
 
 | FMEA-сценарий | Инъекция в sim | Ожидаемая реакция | Воспроизводимо в Gazebo? |
 |---|---|---|---|
-| **VLM медленный** | задержать ответ VLM (sleep в mock-endpoint или `tc netem delay` до vLLM); сжать timeout до p99 | single-in-flight держит план, FLAT продолжает текущий subtask, replan по lead-time, адопция в commit-point | Да (gz + mock/remote VLM) |
-| **VLM/edge упал** | убить vLLM-процесс или edge-namespace; `tc netem loss 100%` к edge | circuit-breaker открывается, VLM-mode деградирует в FLAT, миссия продолжается | Да |
+| **VLM медленный** | задержать ответ VLM API (sleep в mock-эндпоинте OpenAI API); сжать timeout до p99 | single-in-flight держит план, FLAT продолжает текущий subtask, replan по lead-time, адопция в commit-point | Да (gz + mock/remote VLM API) |
+| **VLM API недоступен / edge упал** | вернуть HTTP 5xx/timeout от VLM API (mock); отдельно — убить edge-узлы (детектор/SLAM) | circuit-breaker открывается, VLM-mode деградирует в FLAT, миссия продолжается | Да |
 | **Обрыв Wi-Fi** | `tc netem loss 100%` / `ip link set down` veth между namespace'ами | `map_odom_relay` hold-last-good, Nav2 в `odom` продолжает, нет «фриза» Pi-стека | Да (netns точнее, чем loopback) |
 | **map->odom залип/расходится** | заморозить или подать скачкообразную коррекцию из mock-SLAM | gating по jump/covariance отвергает плохую коррекцию, держит last-good, ребродкаст продолжается | Да |
 | **Clock skew** | искусственно сдвинуть stamp'ы edge-публикатора относительно `/clock` | отвержение устаревших stamp'ов в relay; проверка границ 0.2/0.35/1.5 с | Частично — нужна ручная инъекция (общие часы в sim) |

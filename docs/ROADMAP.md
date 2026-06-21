@@ -46,7 +46,7 @@
 
 ### Phase 4 — VLM-режим
 - [ ] 4.1 Объявить `SeekObject.action`, `PlanStep.msg`, `Notes.msg`.
-- [ ] 4.2 Planner Orchestrator: асинхронный клиент к Qwen3-VL через OpenAI-совместимый vLLM API; single-in-flight, UUID-идемпотентность, streaming.
+- [ ] 4.2 Planner Orchestrator: лёгкий async HTTP-клиент к **внешнему OpenAI-совместимому VLM API** (Qwen3-VL; `base_url`+ключ, модель не хостим, GPU не нужен — сервер vLLM/SGLang/облако вне системы); single-in-flight, UUID-идемпотентность, streaming.
 - [ ] 4.3 Structured/enum tool-call: VLM выбирает только `frontier_id` / `approach_target` из реального списка; навигационных координат не порождает.
 - [ ] 4.4 Timeout из измеренного p99 + circuit-breaker.
 - [ ] 4.5 Notes/summary-буфер: модель пишет компактные заметки вместо хранения кадров; контроль бюджета токенов (`token_estimate`).
@@ -69,7 +69,7 @@
 - [ ] 6.2 Поднять CAN/EPOS4 на реальном `EmbodiedRobotSystem`; проверить quick-stop, fault-poll, bus-off recovery на железе (HIL).
 - [ ] 6.3 RealSense + локальный `/scan` + EKF + облегчённый Nav2 на Pi 5/4GB; подтвердить, что SLAM(edge)+Nav2(Pi) укладываются в бюджет CPU.
 - [ ] 6.4 RTAB-Map: offline mapping → `.db`, online localization → `MapOdomCorrection` на реальной карте.
-- [ ] 6.5 Прогон FLAT-миссии на железе; затем VLM-миссии (локальный или удалённый vLLM).
+- [ ] 6.5 Прогон FLAT-миссии на железе; затем VLM-миссии (через внешний OpenAI-совместимый VLM API — облако или отдельный сервер).
 - [ ] 6.6 Полевой прогон деградации (физическое отключение Wi-Fi/edge) и повтор ключевых FMEA-сценариев на роботе.
 - [ ] **EXIT:** робот выполняет и FLAT-, и VLM-миссии на реальном железе; все безопасностные и деградационные сценарии воспроизводятся в поле; baseline-метрики совпадают с симуляцией в пределах допуска.
 

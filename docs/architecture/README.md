@@ -21,12 +21,17 @@
 Разделение **по латентности**, а не по машине. Медленный VLM никогда не на реактивном пути; робот автономен по навигации без сети.
 
 ```
-                    ┌───────────────────────────────────────────────┐
-  EDGE / ПК (GPU)   │  Делиберативный слой (только режим vlm)         │  ~0.05–0.3 Гц
-  + VLM-эндпоинт    │  Planner Orchestrator → Qwen3-VL-30B-A3B        │  (3–20 с), async
-  (локально/удал.)  │  (OpenAI-совместимый API, vLLM); notes-буфер     │  НЕ блокирует
-                    │  Перцепция: open-vocab детектор (YOLOE/DINO+SAM) │  по запросу
-                    │  SLAM (RTAB-Map) → low-rate map→odom correction  │  1–2 Гц
+  ВНЕШНИЙ VLM API     ┌───────────────────────────────────────────────┐
+  (OpenAI-совмест.;   │  Qwen3-VL-30B-A3B — отдельный сервис / облако   │  ~0.05–0.3 Гц
+  облако/отд. сервер; │  (vLLM/SGLang или провайдер); НЕ на edge/Pi     │  (3–20 с)
+  НЕ хостим у себя)   └───────────────────────▲───────────────────────┘
+                                              │ HTTP (OpenAI-совместимый), async, вне реактива
+                    ┌─────────────────────────┴─────────────────────┐
+  EDGE / ПК (GPU)   │  Planner Orchestrator — HTTP-клиент, без GPU:   │  событийно (vlm)
+                    │  single-in-flight · p99-timeout · breaker ·     │
+                    │  notes/summary-буфер (только режим vlm)         │
+                    │  Перцепция: open-vocab детектор (YOLOE/DINO+SAM)│  по запросу (GPU)
+                    │  SLAM (RTAB-Map) → low-rate map→odom correction │  1–2 Гц (GPU)
                     └───────────────┬───────────────────────────────┘
                                     │ Wi-Fi (rmw_zenoh, chrony, QoS deadline/liveliness)
                                     │ только мелкие/событийные сообщения; idle ≈ 0
@@ -68,4 +73,4 @@
 
 ## Целевой стек
 
-ROS 2 Jazzy · Gazebo Harmonic (gz-sim8) + ros_gz + gz_ros2_control · rmw_zenoh · chrony · Nav2 (NavFn+DWB) · robot_localization (EKF) · RTAB-Map · vLLM ≥ 0.11 (Qwen3-VL) · RealSense D435i · Maxon EPOS4 (CiA-402/SocketCAN).
+ROS 2 Jazzy · Gazebo Harmonic (gz-sim8) + ros_gz + gz_ros2_control · rmw_zenoh · chrony · Nav2 (NavFn+DWB) · robot_localization (EKF) · RTAB-Map · open-vocab детектор (YOLOE/DINO+SAM) на edge-GPU · **внешний OpenAI-совместимый VLM API** (Qwen3-VL-30B-A3B; чем поднят эндпоинт — vLLM≥0.11/SGLang/облако — вне системы) · RealSense D435i · Maxon EPOS4 (CiA-402/SocketCAN).

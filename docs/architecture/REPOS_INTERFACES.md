@@ -7,7 +7,7 @@
 ### 1.1 Принцип разделения
 
 - **`ar_project` (Pi-сторона, executive-on-Pi).** Здесь живут все узлы реального времени и реактивный контур: EKF, облегчённый Nav2, `map_odom_relay`, Search Coordinator (executive FSM/BT), idempotent skill-серверы, `target_pixel_to_goal` (переиспользуется без изменений), `depthimage_to_laserscan`, драйвер RealSense, `ros2_control` + `EmbodiedRobotSystem` (EPOS4 CiA-402 поверх SocketCAN), слой безопасности. VLM на этой стороне нет никогда.
-- **`object_tracking` (edge/PC-сторона).** Здесь живут SLAM (RTAB-Map), открытословарный детектор (YOLOE по умолчанию + GroundingDINO+MobileSAM как fallback, Set-of-Mark), Planner Orchestrator (асинхронный клиент к VLM) и семантическая память / буфер заметок.
+- **`object_tracking` (edge/PC-сторона).** Здесь живут SLAM (RTAB-Map), открытословарный детектор (YOLOE по умолчанию + GroundingDINO+MobileSAM как fallback, Set-of-Mark), Planner Orchestrator (лёгкий async HTTP-клиент к **внешнему OpenAI-совместимому VLM API**; саму модель здесь не хостим) и семантическая память / буфер заметок. На edge-GPU крутятся только детектор и SLAM; VLM — за API.
 - **Транспорт между хостами** — `rmw_zenoh` (один systemd-роутер на edge), fallback Fast DDS LARGE_DATA + Discovery Server, multicast выключен, буферы сокетов 12 МБ, синхронизация часов `chrony` на всех хостах, QoS deadline/liveliness на кросс-линковых топиках. PointCloud2 / сырые depth-потоки по Wi-Fi не передаются никогда — `/scan` генерируется локально на Pi.
 
 ### 1.2 Новые пакеты интерфейсов (interface-only)
@@ -22,9 +22,9 @@
 ### 1.3 Новые пакеты с логикой
 
 - **`search_coordinator`** (НОВЫЙ, `ar_project`-репозиторий, отдельный `ament_python`/`ament_cmake` пакет). Координатор-executive: FSM/BehaviorTree, локальное извлечение фронтиров из costmap, владелец состояния миссии, единственный потребитель решений планировщика. Здесь же — skill-action-серверы (`ExploreFrontier` / `GoToPose` / `ApproachDetection` / `GetObservation` / `Stop`), `map_odom_relay`, локальный извлекатель фронтиров с гистерезисом, mission-epoch / UUID-идемпотентность, default-productive-action.
-- **`planner_orchestrator`** (НОВЫЙ, `object_tracking`-репозиторий, `ament_python`). Асинхронный клиент к VLM (single-in-flight, UUID-идемпотентность, timeout по измеренному p99, circuit-breaker, structured/enum tool-call, streaming), буфер заметок/суммаризации, anytime/async-replan с adoption в commit-point.
+- **`planner_orchestrator`** (НОВЫЙ, `object_tracking`-репозиторий, `ament_python`). Лёгкий async **HTTP-клиент к внешнему OpenAI-совместимому VLM API** (`base_url` + ключ; модель не хостим, GPU не требует): single-in-flight, UUID-идемпотентность, timeout по измеренному p99, circuit-breaker, structured/enum tool-call, streaming; буфер заметок/суммаризации; anytime/async-replan с adoption в commit-point.
 
-Причина выделить координатор и оркестратор в отдельные пакеты, а не складывать скрипты в `ar_project`/`object_tracking`: у них принципиально разный жизненный цикл сборки и зависимостей (координатор — Pi-only, реал-тайм; оркестратор тянет HTTP-клиент/токенайзеры на edge), и каждый должен переживать удаление «soup» из старого пакета без регрессий.
+Причина выделить координатор и оркестратор в отдельные пакеты, а не складывать скрипты в `ar_project`/`object_tracking`: у них принципиально разный жизненный цикл сборки и зависимостей (координатор — Pi-only, реал-тайм; оркестратор — HTTP-клиент к внешнему VLM API на edge, без локальной модели/GPU), и каждый должен переживать удаление «soup» из старого пакета без регрессий.
 
 ### 1.4 Что ПЕРЕИСПОЛЬЗУЕТСЯ / что НОВОЕ / что УДАЛЯЕТСЯ
 
