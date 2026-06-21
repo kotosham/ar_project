@@ -17,6 +17,21 @@
 #include "rclcpp/rclcpp.hpp"
 #include "yaml-cpp/yaml.h"
 
+namespace
+{
+// CiA-402 controlword (object 0x6040) command for "Quick Stop":
+// Enable Voltage (bit 1) = 1, Quick Stop (bit 2, active-low) = 0 -> the drive
+// transitions Operation Enabled -> Quick Stop Active and decelerates on the
+// quick-stop ramp (0x6085 / option code 0x605A). This object is mapped into
+// RPDO1 (see config/epos4_diffdrive/bus.yml), so it can be written from the
+// RT write() loop via tpdo_transmit without a blocking SDO.
+constexpr uint16_t kControlwordIndex = 0x6040;
+constexpr uint32_t kControlwordQuickStop = 0x0002U;
+constexpr uint16_t kTargetVelocityIndex = 0x60FF;
+constexpr uint16_t kStatuswordIndex = 0x6041;
+constexpr uint32_t kStatuswordFaultBit = 0x0008U;
+}  // namespace
+
 namespace ar_project
 {
 
@@ -76,16 +91,19 @@ bool EmbodiedRobotSystem::read_u32_via_sdo(
   return true;
 }
 
-void EmbodiedRobotSystem::poll_and_log_fault_state(canopen_ros2_control::Cia402Data & motor)
+bool EmbodiedRobotSystem::poll_fault_state(canopen_ros2_control::Cia402Data & motor)
 {
+  const bool was_in_fault = active_faults_.find(motor.joint_name) != active_faults_.end();
+
   uint32_t statusword = 0U;
-  if (!read_u32_via_sdo(motor, 0x6041, 0x00, statusword))
+  if (!read_u32_via_sdo(motor, kStatuswordIndex, 0x00, statusword))
   {
-    return;
+    // Could not read the statusword this cycle; preserve the last known state
+    // rather than spuriously asserting or clearing a fault.
+    return was_in_fault;
   }
 
-  const bool in_fault = (statusword & 0x0008U) != 0U;
-  const bool was_in_fault = active_faults_.find(motor.joint_name) != active_faults_.end();
+  const bool in_fault = (statusword & kStatuswordFaultBit) != 0U;
 
   if (in_fault && !was_in_fault)
   {
@@ -126,6 +144,40 @@ void EmbodiedRobotSystem::poll_and_log_fault_state(canopen_ros2_control::Cia402D
       motor.joint_name.c_str());
     active_faults_.erase(motor.joint_name);
   }
+
+  return in_fault;
+}
+
+void EmbodiedRobotSystem::request_quick_stop(const std::string & reason)
+{
+  // RT-safe: flip the latch and log only on the first request.
+  if (!quick_stop_active_.exchange(true))
+  {
+    RCLCPP_ERROR(
+      robot_system_logger, "CiA-402 QUICK STOP latched: %s", reason.c_str());
+  }
+}
+
+bool EmbodiedRobotSystem::transmit_quick_stop(canopen_ros2_control::Cia402Data & motor)
+{
+  // Drive the controlword RPDO into Quick Stop Active (no blocking SDO).
+  ros2_canopen::COData controlword = {
+    kControlwordIndex, 0x00, kControlwordQuickStop};
+  const bool ok = motor.driver->tpdo_transmit(controlword);
+  if (!ok)
+  {
+    RCLCPP_ERROR(
+      robot_system_logger,
+      "Failed to transmit quick-stop controlword for joint '%s'.",
+      motor.joint_name.c_str());
+  }
+
+  // Defensively zero the target velocity as well; the drive ignores it in
+  // Quick Stop Active, but this keeps the commanded setpoint coherent.
+  ros2_canopen::COData zero_velocity = {kTargetVelocityIndex, 0x00, 0U};
+  motor.driver->tpdo_transmit(zero_velocity);
+
+  return ok;
 }
 
 double EmbodiedRobotSystem::joint_direction_sign(const std::string & joint_name)
@@ -358,15 +410,26 @@ hardware_interface::return_type EmbodiedRobotSystem::read(
     motor.actual_effort = 0.0;
   }
 
-  // Poll fault state conservatively to catch EPOS4 red-LED conditions without
-  // adding frequent SDO traffic on a bus that is already time-sensitive.
+  // Scan the EPOS4 fault state every fault_poll_decimation_ cycles and turn a
+  // newly detected fault into an immediate, coordinated quick-stop of ALL
+  // joints (Phase 0.3) instead of only logging it. The faulted axis is already
+  // disabled by its own drive; this stops the remaining axis too so the base
+  // does not lurch on a single wheel.
   fault_poll_counter_++;
-  if (fault_poll_counter_ >= 100U)
+  if (fault_poll_counter_ >= fault_poll_decimation_)
   {
     fault_poll_counter_ = 0U;
+    bool any_fault = false;
     for (auto & motor : robot_motor_data_)
     {
-      poll_and_log_fault_state(motor);
+      if (poll_fault_state(motor))
+      {
+        any_fault = true;
+      }
+    }
+    if (any_fault)
+    {
+      request_quick_stop("EPOS4 fault bit set in statusword");
     }
   }
 
@@ -379,6 +442,8 @@ hardware_interface::return_type EmbodiedRobotSystem::write(
   (void)time;
   (void)period;
 
+  const bool quick_stop = quick_stop_active_.load();
+
   for (auto & motor : robot_motor_data_)
   {
     const auto velocity_interface = motor.joint_name + "/" + hardware_interface::HW_IF_VELOCITY;
@@ -387,6 +452,15 @@ hardware_interface::return_type EmbodiedRobotSystem::write(
         motor.interfaces_to_running.begin(), motor.interfaces_to_running.end(), velocity_interface) ==
       motor.interfaces_to_running.end())
     {
+      continue;
+    }
+
+    // Safety has priority over any commanded setpoint: while a quick-stop is
+    // latched, drive the controlword into Quick Stop Active and skip the normal
+    // velocity command (Phase 0.2).
+    if (quick_stop)
+    {
+      transmit_quick_stop(motor);
       continue;
     }
 

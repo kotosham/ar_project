@@ -145,6 +145,20 @@ def generate_launch_description():
                 )]), launch_arguments={'use_sim_time': 'true', 'use_ros2_control': use_ros2_control}.items()
     )
 
+    cmd_vel_watchdog = Node(
+        package=package_name,
+        executable='cmd_vel_watchdog.py',
+        name='cmd_vel_watchdog',
+        parameters=[{
+            'input_topic': '/cmd_vel',
+            'output_topic': '/cmd_vel_safe',
+            'timeout': 0.5,
+            'publish_rate': 20.0,
+            'use_sim_time': True,
+        }],
+        output='screen',
+    )
+
     twist_mux_params = os.path.join(get_package_share_directory(package_name), 'config', 'twist_mux.yaml')
     twist_mux = Node(
         package = "twist_mux",
@@ -226,6 +240,7 @@ def generate_launch_description():
         gui_arg,
         use_ros2_control_arg,
         rsp,
+        cmd_vel_watchdog,
         twist_mux,
         gazebo_gui,
         gazebo_headless,

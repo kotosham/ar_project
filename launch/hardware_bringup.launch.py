@@ -131,6 +131,23 @@ def generate_launch_description():
         ),
     )
 
+    cmd_vel_watchdog = Node(
+        package='ar_project',
+        executable='cmd_vel_watchdog.py',
+        name='cmd_vel_watchdog',
+        parameters=[
+            {
+                'input_topic': '/cmd_vel',
+                'output_topic': '/cmd_vel_safe',
+                'timeout': 0.5,
+                'publish_rate': 20.0,
+                'use_sim_time': False,
+            }
+        ],
+        output='screen',
+        condition=IfCondition(use_twist_mux),
+    )
+
     twist_mux = Node(
         package='twist_mux',
         executable='twist_mux',
@@ -299,6 +316,7 @@ def generate_launch_description():
         imu_orientation_filter,
         ekf_filter_node_raw_imu,
         ekf_filter_node_filtered_imu,
+        cmd_vel_watchdog,
         twist_mux,
         twist_to_stamped_from_mux,
         twist_to_stamped_direct,

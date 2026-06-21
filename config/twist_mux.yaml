@@ -3,7 +3,9 @@ twist_mux:
     use_stamped: false
     topics:
       navigation:
-        topic   : cmd_vel
+        # Fed by cmd_vel_watchdog (Phase 0.5): pass-through of Nav2 /cmd_vel
+        # while fresh, deterministic zero + HOLD when the planner goes stale.
+        topic   : cmd_vel_safe
         timeout : 0.5
         priority: 10
       tracker:

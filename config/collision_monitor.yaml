@@ -1,0 +1,56 @@
+# Nav2 Collision Monitor (ROADMAP Phase 0.6).
+#
+# Independent reactive safety layer that guards the FINAL, muxed velocity command
+# against obstacles seen in the local /scan, just before it reaches the hardware.
+# It is placed AFTER twist_mux so it also protects teleop and tracker commands,
+# not only Nav2:
+#
+#   twist_mux (/cmd_vel_out) -> collision_monitor -> /cmd_vel_collision_safe
+#       -> twist_to_twist_stamped -> /diff_cont/cmd_vel
+#
+# Activation depends on the local /scan produced by depthimage_to_laserscan
+# (ROADMAP Phase 1.4). Until /scan is published the monitor treats the source as
+# stale after `source_timeout` and passes commands through unchanged, so wiring
+# it in early is non-breaking. To activate, point the twist_to_twist_stamped
+# input at /cmd_vel_collision_safe (see collision_monitor.launch.py).
+#
+# NOTE: footprint reference (from nav2_params.yaml):
+#   [[0.275, 0.191], [0.275, -0.191], [-0.085, -0.191], [-0.085, 0.191]]
+# i.e. +0.275 m front, -0.085 m rear, +/-0.191 m sides. Max forward speed 0.26 m/s.
+collision_monitor:
+  ros__parameters:
+    use_sim_time: False
+    base_frame_id: "base_link"
+    odom_frame_id: "odom"
+    cmd_vel_in_topic: "cmd_vel_out"
+    cmd_vel_out_topic: "cmd_vel_collision_safe"
+    state_topic: "collision_monitor_state"
+    transform_tolerance: 0.2
+    source_timeout: 1.0
+    base_shift_correction: True
+    stop_pub_timeout: 2.0
+    polygons: ["PolygonStop", "PolygonSlow"]
+    # Hard stop: footprint grown by ~0.12 m front and sides, ~0.11 m rear.
+    PolygonStop:
+      type: "polygon"
+      points: "[[0.40, 0.31], [0.40, -0.31], [-0.20, -0.31], [-0.20, 0.31]]"
+      action_type: "stop"
+      min_points: 4
+      visualize: True
+      polygon_pub_topic: "collision_polygon_stop"
+      enabled: True
+    # Pre-emptive slowdown zone: larger box, scales velocity to 30 %.
+    PolygonSlow:
+      type: "polygon"
+      points: "[[0.65, 0.45], [0.65, -0.45], [-0.30, -0.45], [-0.30, 0.45]]"
+      action_type: "slowdown"
+      slowdown_ratio: 0.3
+      min_points: 4
+      visualize: True
+      polygon_pub_topic: "collision_polygon_slow"
+      enabled: True
+    observation_sources: ["scan"]
+    scan:
+      type: "scan"
+      topic: "/scan"
+      enabled: True

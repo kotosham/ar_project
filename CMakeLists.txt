@@ -72,6 +72,7 @@ install(
 install(
   PROGRAMS
     scripts/calibration_motion.py
+    scripts/cmd_vel_watchdog.py
     scripts/experiment_metrics_logger.py
     scripts/home_pose_manager.py
     scripts/odom_to_tf.py
