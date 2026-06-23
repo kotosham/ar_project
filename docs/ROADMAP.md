@@ -20,11 +20,11 @@
 - [ ] 1.3 Навесить QoS deadline/liveliness на все кросс-линковые топики; ввести `Heartbeat.msg` от продьюсеров.
 - [ ] 1.4 Локальный `/scan` через `depthimage_to_laserscan`; подключить как obstacle-source costmap; подтвердить, что PointCloud2/raw depth по Wi-Fi не уходят.
 - [ ] 1.5 Gazebo-on-WSL bring-up: миры `test_1..3`, запуск симулятора, RealSense-эмуляция, проверка топиков.
-- [ ] 1.6 Создать ветки/каркас новых пакетов: `ar_project_msgs`, `object_tracking_msgs`, `search_coordinator`, `planner_orchestrator` (пустые сборки проходят).
+- [x] 1.6 Создать ветки/каркас новых пакетов: `ar_project_msgs`, `object_tracking_msgs`, `search_coordinator`, `planner_orchestrator` (пустые сборки проходят). — Все 4 собраны в WSL (rosidl-генерация 13 интерфейсов; скелеты `coordinator_node`/`orchestrator_node` запускаются). ⚠️ Репо `ar_project`/`object_tracking` — single-package (`package.xml` в корне), поэтому новые пакеты вложены и colcon не находит их рекурсивно: в workspace подключены симлинками `src/<pkg> -> src/<repo>/<pkg>` (или `colcon build --paths …`). Открытый вопрос: оставить симлинки vs. реструктурировать репо в multi-package.
 - [ ] **EXIT:** кросс-хостовая связность по zenoh с измеренным jitter в пределах бюджета; `/scan` локальный; Gazebo-сцена поднимается одной командой; пустые пакеты собираются `colcon build`.
 
 ### Phase 2 — ZERO-VLM FLAT базлайн (гейт для всего остального)
-- [ ] 2.1 Объявить все интерфейсы skill-actions в `ar_project_msgs` (`ExploreFrontier`, `GoToPose`, `ApproachDetection`, `GetObservation`, `Stop`) + `MapOdomCorrection.msg`.
+- [x] 2.1 Объявить все интерфейсы skill-actions в `ar_project_msgs` (`ExploreFrontier`, `GoToPose`, `ApproachDetection`, `GetObservation`, `Stop`) + `MapOdomCorrection.msg`. — Объявлены + `Heartbeat.msg`, `SetMode.srv`; типы генерируются. `GetObservation` несёт `object_tracking_msgs/Candidate[]` (кросс-зависимость разрешается в общем workspace).
 - [ ] 2.2 Реализовать executive FSM/BT в `search_coordinator`: владение mission state, всегда удерживается committed subgoal + default-productive-action.
 - [ ] 2.3 `[FMEA]` Локальный frontier-extractor из costmap + явный гистерезис выбора (score margin + min dwell time) для подавления осцилляции.
 - [ ] 2.4 Реализовать skill-серверы (Explore/GoTo/Approach/GetObs/Stop): preemptable, feedback-carrying, UUID-идемпотентные.
@@ -37,7 +37,7 @@
 - [ ] **EXIT:** робот в Gazebo на Pi-классе нагрузки находит и подъезжает к цели в чисто-FLAT режиме без VLM; нет осцилляции фронтиров; смена инструкции корректно сбрасывает миссию; измеренный baseline зафиксирован как гейт — дальнейшие фазы не начинаются, пока этот критерий не выполнен.
 
 ### Phase 3 — Восприятие как сервис
-- [ ] 3.1 Объявить `DetectTarget.action` + `Candidate.msg` в `object_tracking_msgs`.
+- [x] 3.1 Объявить `DetectTarget.action` + `Candidate.msg` в `object_tracking_msgs`. — Объявлены вместе с остальными интерфейсами на этапе 1.6 (типы генерируются).
 - [ ] 3.2 Реализовать `DetectTarget`-сервер на edge: YOLOE по умолчанию, GroundingDINO+MobileSAM fallback; CLIPSeg из грудинга исключён.
 - [ ] 3.3 Set-of-Mark рендер кандидатов (нумерованные метки) для будущего выбора VLM по `mark_id`.
 - [ ] 3.4 `[FMEA]` Детект staleness потока детекций: `ApproachDetection` не объявляет `reached` на устаревшем пикселе (`detection_fresh=false`, `max_pixel_age_s`), возвращает `STALE_DETECTION`/`LOST_TARGET` вместо ложного success.
@@ -45,7 +45,7 @@
 - [ ] **EXIT:** детектор работает как запросный сервис с Set-of-Mark; устаревший пиксель никогда не приводит к авто-success подъезда (проверено инъекцией задержки потока).
 
 ### Phase 4 — VLM-режим
-- [ ] 4.1 Объявить `SeekObject.action`, `PlanStep.msg`, `Notes.msg`.
+- [x] 4.1 Объявить `SeekObject.action`, `PlanStep.msg`, `Notes.msg`. — Объявлены в `object_tracking_msgs` на этапе 1.6 (типы генерируются).
 - [ ] 4.2 Planner Orchestrator: лёгкий async HTTP-клиент к **внешнему OpenAI-совместимому VLM API** (Qwen3-VL; `base_url`+ключ, модель не хостим, GPU не нужен — сервер vLLM/SGLang/облако вне системы); single-in-flight, UUID-идемпотентность, streaming.
 - [ ] 4.3 Structured/enum tool-call: VLM выбирает только `frontier_id` / `approach_target` из реального списка; навигационных координат не порождает.
 - [ ] 4.4 Timeout из измеренного p99 + circuit-breaker.
