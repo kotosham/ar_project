@@ -35,6 +35,7 @@ def generate_launch_description():
     linear_update = LaunchConfiguration('linear_update')
     angular_update = LaunchConfiguration('angular_update')
     delete_db_on_start = LaunchConfiguration('delete_db_on_start')
+    publish_tf_map = LaunchConfiguration('publish_tf_map')
     rgb_topic_input = PythonExpression([
         "'",
         rgb_topic,
@@ -179,6 +180,14 @@ def generate_launch_description():
         default_value='true',
         description='Delete the RTAB-Map database on startup. Keep false when reusing a map for localization.',
     )
+    declare_publish_tf_map = DeclareLaunchArgument(
+        'publish_tf_map',
+        default_value='true',
+        description=(
+            'Let RTAB-Map broadcast map->odom on /tf. Set false when map_odom_relay '
+            '(ROADMAP 2.6) is the map->odom source, so the two do not fight on /tf.'
+        ),
+    )
 
     depth_cloud_from_rgbd = Node(
         package='rtabmap_util',
@@ -275,7 +284,7 @@ def generate_launch_description():
             'namespace': '',
             'frame_id': 'base_link',
             'map_frame_id': 'map',
-            'publish_tf_map': 'true',
+            'publish_tf_map': publish_tf_map,
             'initial_pose': initial_pose,
             'rgb_topic': rgb_topic_input,
             'depth_topic': depth_topic_input,
@@ -352,6 +361,7 @@ def generate_launch_description():
         declare_linear_update,
         declare_angular_update,
         declare_delete_db_on_start,
+        declare_publish_tf_map,
         republish_rgb_compressed,
         republish_depth_compressed,
         depth_cloud_from_rgbd,

@@ -20,6 +20,7 @@ setup(
     entry_points={
         'console_scripts': [
             'coordinator_node = search_coordinator.coordinator_node:main',
+            'map_odom_relay = search_coordinator.map_odom_relay:main',
         ],
     },
 )
