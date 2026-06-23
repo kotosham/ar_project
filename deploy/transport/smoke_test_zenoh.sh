@@ -3,9 +3,11 @@
 # Confirms that with multicast OFF, pub->sub delivery works THROUGH the local
 # router (i.e. discovery does not depend on multicast). Run in WSL:
 #   bash deploy/transport/smoke_test_zenoh.sh
-set -u
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Source ROS BEFORE `set -u`: ROS setup.bash is not nounset-clean
+# (references AMENT_TRACE_SETUP_FILES unbound).
 source /opt/ros/jazzy/setup.bash
+set -u
 RUN="$(mktemp -d)"
 sed 's/EDGE_HOST/localhost/' "$HERE/zenoh_session_config.json5" > "$RUN/session.json5"
 
