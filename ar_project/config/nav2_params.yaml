@@ -32,7 +32,9 @@ bt_navigator_navigate_to_pose_rclcpp_node:
 controller_server:
   ros__parameters:
     use_sim_time: False
-    controller_frequency: 15.0
+    # Phase 2.7: lightened for Pi (was 15.0). DWB at 10 Hz is sufficient for the
+    # 0.26 m/s platform and frees CPU for perception/transport.
+    controller_frequency: 10.0
     min_x_velocity_threshold: 0.001
     min_y_velocity_threshold: 0.5
     min_theta_velocity_threshold: 0.001
@@ -135,9 +137,8 @@ local_costmap:
           raytrace_min_range: 0.0
           obstacle_max_range: 6.0
           obstacle_min_range: 0.0
-      static_layer:
-        plugin: "nav2_costmap_2d::StaticLayer"
-        map_subscribe_transient_local: True
+      # Phase 2.7: removed dead static_layer block (not in plugins list above;
+      # the rolling local costmap in `odom` carries no static map).
       always_send_full_costmap: True
 
 global_costmap:
@@ -154,6 +155,8 @@ global_costmap:
       plugins: ["static_layer", "inflation_layer"]
       static_layer:
         plugin: "nav2_costmap_2d::StaticLayer"
+        # Phase 2.7: in SLAM/FLAT mode the /map occupancy grid is published by
+        # RTAB-Map (not map_server — map_server is not launched in this stack).
         map_subscribe_transient_local: True
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
@@ -164,8 +167,9 @@ global_costmap:
 map_server:
   ros__parameters:
     use_sim_time: False
-    # Overridden in launch by the "map" launch configuration or provided default value.
-    # To use in yaml, remove the default "map" value in the tb3_simulation_launch.py file & provide full path to map below.
+    # Phase 2.7: map_server is NOT launched in this stack — the /map occupancy
+    # grid comes from RTAB-Map (SLAM). This block is retained only so a static
+    # pre-built map can be served later (set yaml_filename + add to a launch).
     yaml_filename: ""
 
 map_saver:
@@ -178,7 +182,9 @@ map_saver:
 
 planner_server:
   ros__parameters:
-    expected_planner_frequency: 20.0
+    # Phase 2.7: replanning is event-driven (on goal / RecoveryNode), not a hot
+    # loop. 1.0 Hz only sets the "planner too slow" warning floor; was 20.0.
+    expected_planner_frequency: 1.0
     use_sim_time: False
     planner_plugins: ["GridBased"]
     GridBased:
@@ -187,32 +193,24 @@ planner_server:
       use_astar: false
       allow_unknown: true
 
-smoother_server:
-  ros__parameters:
-    use_sim_time: False
-    smoother_plugins: ["simple_smoother"]
-    simple_smoother:
-      plugin: "nav2_smoother::SimpleSmoother"
-      tolerance: 1.0e-10
-      max_its: 1000
-      do_refinement: True
+# Phase 2.7: smoother_server dropped. The default NavigateToPose BT does not call
+# SmoothPath; DWB + velocity_smoother already shape the trajectory. Removing it
+# saves a lifecycle node + costmap subscription on the Pi.
 
 behavior_server:
   ros__parameters:
     costmap_topic: local_costmap/costmap_raw
     footprint_topic: local_costmap/published_footprint
     cycle_frequency: 10.0
-    behavior_plugins: ["spin", "backup", "drive_on_heading", "assisted_teleop", "wait"]
+    # Phase 2.7: trimmed to spin/backup/wait (the recoveries the default BT uses);
+    # dropped drive_on_heading + assisted_teleop (unused by the executive).
+    behavior_plugins: ["spin", "backup", "wait"]
     spin:
       plugin: "nav2_behaviors::Spin"
     backup:
       plugin: "nav2_behaviors::BackUp"
-    drive_on_heading:
-      plugin: "nav2_behaviors::DriveOnHeading"
     wait:
       plugin: "nav2_behaviors::Wait"
-    assisted_teleop:
-      plugin: "nav2_behaviors::AssistedTeleop"
     global_frame: odom
     robot_base_frame: base_link
     transform_tolerance: 0.1
@@ -226,16 +224,8 @@ robot_state_publisher:
   ros__parameters:
     use_sim_time: False
 
-waypoint_follower:
-  ros__parameters:
-    use_sim_time: False
-    loop_rate: 20
-    stop_on_failure: false
-    waypoint_task_executor_plugin: "wait_at_waypoint"
-    wait_at_waypoint:
-      plugin: "nav2_waypoint_follower::WaitAtWaypoint"
-      enabled: True
-      waypoint_pause_duration: 200
+# Phase 2.7: waypoint_follower dropped. The executive drives single NavigateToPose
+# goals through the skill servers (no FollowWaypoints/multi-waypoint missions).
 
 velocity_smoother:
   ros__parameters:
