@@ -43,9 +43,21 @@ class SearchCoordinator(Node):
         self.nav_driver = Nav2Driver(self)
         self.skills = build_all_skills(self, self.mission_state, self.nav_driver)
 
+        # Phase 2.5: keep the heartbeat publisher + monitor aligned with the
+        # mission epoch so zombie beats from a previous mission are ignored
+        # (must-fix #8). The SeekObject FSM (Phase 2.2) calls this on every
+        # ABORT-AND-RESET / new instruction.
+        self.sync_mission_epoch()
+
         self.get_logger().info(
             'search_coordinator up (Phase 2.4): skill servers %s; epoch=%d.'
             % (sorted(self.skills.keys()), self.mission_state.current_epoch()))
+
+    def sync_mission_epoch(self) -> None:
+        """Push the current mission epoch to the heartbeat publisher + monitor."""
+        epoch = self.mission_state.current_epoch()
+        self.heartbeat.set_mission_epoch(epoch)
+        self.heartbeat_monitor.set_mission_epoch(epoch)
 
 
 def main() -> None:

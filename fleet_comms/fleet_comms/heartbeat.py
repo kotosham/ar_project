@@ -21,6 +21,18 @@ except ImportError:  # older distros
     from rclpy.qos_event import SubscriptionEventCallbacks
 
 
+UINT32_HALF = 0x80000000
+UINT32_MASK = 0xFFFFFFFF
+
+
+def _epoch_is_stale(beat_epoch: int, current_epoch: int) -> bool:
+    """uint32 wrap-safe: True if `beat_epoch` is strictly OLDER than the current
+    mission epoch (a zombie heartbeat from a previous mission). Equal or newer
+    (a monitor that lags its own authority — shouldn't happen) is NOT stale."""
+    diff = (current_epoch - beat_epoch) & UINT32_MASK
+    return 0 < diff < UINT32_HALF
+
+
 def _cpu_load() -> float:
     """1-minute load average normalised by CPU count (0..~1+). 0.0 if unavailable."""
     try:
@@ -101,10 +113,12 @@ class HeartbeatMonitor:
             self.last_seen_ns = last_seen_ns
 
     def __init__(self, node, expected_period_s: float = 1.0, topic: str = '/heartbeat',
-                 stale_factor: float = 2.5):
+                 stale_factor: float = 2.5, mission_epoch: int = 0):
         self._node = node
         self._stale_ns = int(stale_factor * expected_period_s * 1e9)
         self._nodes = {}
+        self._mission_epoch = int(mission_epoch) & UINT32_MASK
+        self._ignored_stale_epoch = 0
         callbacks = SubscriptionEventCallbacks(
             deadline=self._on_deadline_missed,
             liveliness=self._on_liveliness_changed,
@@ -114,7 +128,24 @@ class HeartbeatMonitor:
             event_callbacks=callbacks)
         self._timer = node.create_timer(expected_period_s, self._check_stale)
 
+    def set_mission_epoch(self, epoch: int) -> None:
+        """Track the active mission epoch so zombie beats from a previous mission
+        (stamped with an older epoch) are ignored (FMEA 2.5, must-fix #8). The
+        executive calls this whenever it bumps the epoch."""
+        self._mission_epoch = int(epoch) & UINT32_MASK
+
+    def ignored_stale_epoch_count(self) -> int:
+        return self._ignored_stale_epoch
+
     def _on_msg(self, msg: Heartbeat) -> None:
+        if _epoch_is_stale(msg.mission_epoch, self._mission_epoch):
+            # A producer still beating for a dead mission must NOT refresh its
+            # health: it should read as STALE until it adopts the new epoch.
+            self._ignored_stale_epoch += 1
+            self._node.get_logger().debug(
+                'heartbeat: ignoring stale-epoch beat from "%s" (beat=%d current=%d)'
+                % (msg.node_name, msg.mission_epoch, self._mission_epoch))
+            return
         self._nodes[msg.node_name] = self._Health(
             status=msg.status,
             last_seen_ns=self._node.get_clock().now().nanoseconds,
