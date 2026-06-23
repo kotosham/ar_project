@@ -159,6 +159,29 @@ def generate_launch_description():
         output='screen',
     )
 
+    # Local /scan from the depth image (Phase 1.4). Generated on-robot; never
+    # stream PointCloud2/raw depth over Wi-Fi. Feeds the costmap obstacle layer
+    # and the Collision Monitor (Phase 0.6).
+    depthimage_to_laserscan = Node(
+        package='depthimage_to_laserscan',
+        executable='depthimage_to_laserscan_node',
+        name='depthimage_to_laserscan',
+        parameters=[{
+            'output_frame': 'camera_link_optical',
+            'range_min': 0.1,
+            'range_max': 8.0,
+            'scan_height': 10,
+            'scan_time': 0.033,
+            'use_sim_time': True,
+        }],
+        remappings=[
+            ('depth', '/camera/camera/depth/image_rect_raw'),
+            ('depth_camera_info', '/camera/camera/depth/camera_info'),
+            ('scan', '/scan'),
+        ],
+        output='screen',
+    )
+
     twist_mux_params = os.path.join(get_package_share_directory(package_name), 'config', 'twist_mux.yaml')
     twist_mux = Node(
         package = "twist_mux",
@@ -248,4 +271,5 @@ def generate_launch_description():
         spawn_controllers,
         ros_gz_bridge,
         odom_tf_bridge,
+        depthimage_to_laserscan,
     ])

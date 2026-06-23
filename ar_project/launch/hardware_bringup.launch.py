@@ -148,6 +148,32 @@ def generate_launch_description():
         condition=IfCondition(use_twist_mux),
     )
 
+    # Local /scan from the depth image (Phase 1.4) — generated on the Pi, so no
+    # PointCloud2/raw depth crosses Wi-Fi. Feeds the costmap obstacle layer and
+    # the Collision Monitor (Phase 0.6).
+    # NOTE: output_frame must match the actual RealSense depth optical frame on
+    # real hardware (verify in Phase 6 hardware bring-up); 'camera_link_optical'
+    # matches the URDF/sim frame.
+    depthimage_to_laserscan = Node(
+        package='depthimage_to_laserscan',
+        executable='depthimage_to_laserscan_node',
+        name='depthimage_to_laserscan',
+        parameters=[{
+            'output_frame': 'camera_link_optical',
+            'range_min': 0.1,
+            'range_max': 8.0,
+            'scan_height': 10,
+            'scan_time': 0.033,
+            'use_sim_time': False,
+        }],
+        remappings=[
+            ('depth', '/camera/camera/depth/image_rect_raw'),
+            ('depth_camera_info', '/camera/camera/depth/camera_info'),
+            ('scan', '/scan'),
+        ],
+        output='screen',
+    )
+
     twist_mux = Node(
         package='twist_mux',
         executable='twist_mux',
@@ -317,6 +343,7 @@ def generate_launch_description():
         ekf_filter_node_raw_imu,
         ekf_filter_node_filtered_imu,
         cmd_vel_watchdog,
+        depthimage_to_laserscan,
         twist_mux,
         twist_to_stamped_from_mux,
         twist_to_stamped_direct,
