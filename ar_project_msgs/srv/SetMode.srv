@@ -1,0 +1,7 @@
+# Optional manual/test mode forcing.
+uint8 FLAT=0
+uint8 VLM=1
+uint8 mode
+---
+bool accepted
+uint8 active_mode

@@ -1,0 +1,19 @@
+# Drive to a pose via Nav2.
+# Goal
+string request_id
+uint32 mission_epoch
+geometry_msgs/PoseStamped target_pose
+float32 xy_tolerance
+float32 yaw_tolerance
+---
+# Result
+uint8 SUCCEEDED=0
+uint8 ABORTED=1
+uint8 PREEMPTED=2
+
+uint8 outcome
+geometry_msgs/PoseStamped reached_pose
+---
+# Feedback
+float32 distance_remaining
+builtin_interfaces/Time stamp

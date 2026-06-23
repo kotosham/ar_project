@@ -1,0 +1,23 @@
+# Final approach to a detection (wrapper around target_pixel_to_goal).
+# Goal
+string request_id
+uint32 mission_epoch
+string target_label          # what is confirmed on approach
+float32 approach_offset      # meters; default 0.58
+float32 max_pixel_age_s      # pixel freshness threshold; default 1.5
+---
+# Result
+uint8 SUCCEEDED=0
+uint8 ABORTED=1
+uint8 PREEMPTED=2
+uint8 STALE_DETECTION=3
+uint8 LOST_TARGET=4
+
+uint8 outcome
+geometry_msgs/PoseStamped reached_pose
+float32 final_distance_m
+---
+# Feedback
+float32 distance_to_target
+float32 detection_age_s      # age of the last valid pixel
+bool detection_fresh         # false => do NOT declare reached (FMEA fix)

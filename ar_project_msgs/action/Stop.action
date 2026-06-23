@@ -1,0 +1,18 @@
+# Idempotent safe stop / bring to default-productive-action.
+# Goal
+uint8 SOFT_STOP=0
+uint8 HOLD=1
+uint8 QUICK_STOP_REQUEST=2
+
+string request_id
+uint32 mission_epoch
+uint8 mode
+---
+# Result
+uint8 SUCCEEDED=0
+uint8 ABORTED=1
+
+uint8 outcome
+---
+# Feedback
+bool zero_velocity_confirmed

@@ -1,0 +1,20 @@
+# Local frontier exploration (executed on the Pi).
+# Goal
+string request_id
+uint32 mission_epoch
+int32 frontier_id            # -1 = pick best locally; >=0 = given id from the list
+float32 max_travel_m         # travel limit
+---
+# Result
+uint8 SUCCEEDED=0
+uint8 ABORTED=1
+uint8 PREEMPTED=2
+uint8 NO_FRONTIER=3
+
+uint8 outcome
+geometry_msgs/PoseStamped reached_pose
+---
+# Feedback
+float32 distance_remaining
+int32 selected_frontier_id
+float32 frontier_score

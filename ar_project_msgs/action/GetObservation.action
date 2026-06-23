@@ -1,0 +1,18 @@
+# Capture an observation / frame(s) for the VLM/detector at a safe pose.
+# Goal
+string request_id
+uint32 mission_epoch
+bool with_setofmark          # render Set-of-Mark candidates
+---
+# Result
+uint8 SUCCEEDED=0
+uint8 ABORTED=1
+uint8 PREEMPTED=2
+
+uint8 outcome
+sensor_msgs/CompressedImage view              # compressed frame (via edge, not PointCloud2)
+object_tracking_msgs/Candidate[] candidates
+geometry_msgs/PoseStamped observed_from
+---
+# Feedback
+string phase                 # ALIGNING/CAPTURING/RENDERING
