@@ -25,11 +25,17 @@ def generate_launch_description():
     use_sim_time = LaunchConfiguration('use_sim_time')
     params_file = LaunchConfiguration('params_file')
     autostart = LaunchConfiguration('autostart')
+    cmd_vel_in_topic = LaunchConfiguration('cmd_vel_in_topic')
+    cmd_vel_out_topic = LaunchConfiguration('cmd_vel_out_topic')
 
     configured_params = ParameterFile(
         RewrittenYaml(
             source_file=params_file,
-            param_rewrites={'use_sim_time': use_sim_time},
+            param_rewrites={
+                'use_sim_time': use_sim_time,
+                'cmd_vel_in_topic': cmd_vel_in_topic,
+                'cmd_vel_out_topic': cmd_vel_out_topic,
+            },
             convert_types=True),
         allow_substs=True)
 
@@ -66,6 +72,14 @@ def generate_launch_description():
             'autostart',
             default_value='true',
             description='Automatically start (configure+activate) the collision monitor.'),
+        DeclareLaunchArgument(
+            'cmd_vel_in_topic',
+            default_value='cmd_vel_out',
+            description='Input Twist topic (the muxed velocity command to guard).'),
+        DeclareLaunchArgument(
+            'cmd_vel_out_topic',
+            default_value='cmd_vel_collision_safe',
+            description='Output Twist topic (guarded command sent downstream).'),
         collision_monitor_node,
         lifecycle_manager,
     ])

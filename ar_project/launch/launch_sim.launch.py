@@ -183,11 +183,26 @@ def generate_launch_description():
     )
 
     twist_mux_params = os.path.join(get_package_share_directory(package_name), 'config', 'twist_mux.yaml')
+    # twist_mux publishes the merged command on /cmd_vel_out; the Collision
+    # Monitor (Phase 0.6) guards it and republishes to the gz diff-drive topic.
     twist_mux = Node(
         package = "twist_mux",
         executable = "twist_mux",
         parameters = [twist_mux_params, {'use_sim_time': True}],
-        remappings = [('/cmd_vel_out', '/diff_cont/cmd_vel_unstamped')]
+    )
+
+    # Nav2 Collision Monitor (Phase 0.6): reactive stop/slowdown layer on the
+    # final muxed command, using the local /scan (Phase 1.4). Sits between
+    # twist_mux and the gz diff-drive input so it guards every command source.
+    collision_monitor = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource([os.path.join(
+            get_package_share_directory(package_name), 'launch', 'collision_monitor.launch.py'
+        )]),
+        launch_arguments={
+            'use_sim_time': 'true',
+            'cmd_vel_in_topic': '/cmd_vel_out',
+            'cmd_vel_out_topic': '/diff_cont/cmd_vel_unstamped',
+        }.items(),
     )
     bridge_params = os.path.join(get_package_share_directory(package_name), 'config', 'gz_bridge.yaml')
 
@@ -265,6 +280,7 @@ def generate_launch_description():
         rsp,
         cmd_vel_watchdog,
         twist_mux,
+        collision_monitor,
         gazebo_gui,
         gazebo_headless,
         spawn_entity,

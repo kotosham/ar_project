@@ -183,12 +183,29 @@ def generate_launch_description():
         condition=IfCondition(use_twist_mux),
     )
 
+    # Nav2 Collision Monitor (Phase 0.6): reactive stop/slowdown on the final
+    # muxed command using the local /scan (Phase 1.4). Inserted between
+    # twist_mux (/cmd_vel_out) and the Twist->Stamped bridge, so it guards every
+    # command source. Only runs with the mux; the direct (no-mux) debug path
+    # below stays unguarded.
+    collision_monitor = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            os.path.join(package_share, 'launch', 'collision_monitor.launch.py')
+        ),
+        launch_arguments={
+            'use_sim_time': 'false',
+            'cmd_vel_in_topic': '/cmd_vel_out',
+            'cmd_vel_out_topic': '/cmd_vel_collision_safe',
+        }.items(),
+        condition=IfCondition(use_twist_mux),
+    )
+
     twist_to_stamped_from_mux = Node(
         package='ar_project',
         executable='twist_to_twist_stamped.py',
         parameters=[
             {
-                'input_topic': '/cmd_vel_out',
+                'input_topic': '/cmd_vel_collision_safe',
                 'output_topic': '/diff_cont/cmd_vel',
             }
         ],
@@ -345,6 +362,7 @@ def generate_launch_description():
         cmd_vel_watchdog,
         depthimage_to_laserscan,
         twist_mux,
+        collision_monitor,
         twist_to_stamped_from_mux,
         twist_to_stamped_direct,
         joint_state_broadcaster_spawner,
