@@ -19,10 +19,22 @@ from fleet_comms.qos import (
     control_cmd_latched,
     correction_lowrate,
     detection_stream,
+    detection_stream_nodeadline,
     is_compatible,
     liveliness_status,
     media_besteffort,
 )
+
+
+def _tracker_target_pixel_offered():
+    """Mirror of rgb_tracker_node.py's `tracking_output_qos` for /target_pixel:
+    BEST_EFFORT, VOLATILE, depth 1, NO offered deadline (sporadic stream)."""
+    return QoSProfile(
+        history=QoSHistoryPolicy.KEEP_LAST,
+        depth=1,
+        reliability=QoSReliabilityPolicy.BEST_EFFORT,
+        durability=QoSDurabilityPolicy.VOLATILE,
+    )
 
 
 def test_profile_fields():
@@ -88,6 +100,31 @@ def test_reliability_besteffort_cannot_satisfy_reliable():
     ok, reasons = is_compatible(media_besteffort(), control_cmd())
     assert not ok
     assert any('reliability' in r for r in reasons)
+
+
+def test_target_pixel_deadline_consumer_is_the_bug():
+    # must-fix #2: the no-deadline tracker publisher CANNOT satisfy a consumer that
+    # requests detection_stream()'s 1.5 s deadline (offered inf > requested 1.5)
+    # -> silent zero samples. This is exactly the pair to forbid.
+    offered = _tracker_target_pixel_offered()
+    ok, reasons = is_compatible(offered, detection_stream())
+    assert not ok
+    assert any('deadline' in r for r in reasons)
+
+
+def test_target_pixel_nodeadline_consumer_is_the_fix():
+    # The fix: a no-deadline consumer is compatible with the no-deadline publisher.
+    offered = _tracker_target_pixel_offered()
+    ok, reasons = is_compatible(offered, detection_stream_nodeadline())
+    assert ok, reasons
+
+
+def test_detection_stream_nodeadline_fields():
+    d = detection_stream_nodeadline()
+    assert d.reliability == QoSReliabilityPolicy.BEST_EFFORT
+    assert d.durability == QoSDurabilityPolicy.VOLATILE
+    assert d.depth == 1
+    assert d.deadline.nanoseconds == 0  # unset == infinite (no deadline requested)
 
 
 def test_deadline_offered_must_not_exceed_requested():

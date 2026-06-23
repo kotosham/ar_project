@@ -13,7 +13,8 @@ This is the single source of truth; `fleet_comms` is depended on by
 | `control_cmd_latched` | RELIABLE | TRANSIENT_LOCAL | 1 | — | AUTOMATIC | SeekObject result/status (operator reconnect) |
 | `liveliness_status(p)` | RELIABLE | VOLATILE | 1 | 1.5·p | MANUAL_BY_TOPIC (3·p) | Heartbeat + periodic health |
 | `correction_lowrate` | RELIABLE | VOLATILE | 1 | 1.0 s | AUTOMATIC (3 s) | MapOdomCorrection (~1–2 Hz) |
-| `detection_stream` | BEST_EFFORT | VOLATILE | 1 | 1.5 s | — | /target_pixel (lossy, freshest-only) |
+| `detection_stream` | BEST_EFFORT | VOLATILE | 1 | 1.5 s | — | OFFER side of a *periodic* detection stream (publisher) |
+| `detection_stream_nodeadline` | BEST_EFFORT | VOLATILE | 1 | — | — | /target_pixel **consumer** (sporadic stream; freshness via app age-gate) |
 | `media_besteffort` | BEST_EFFORT | VOLATILE | 1 | — | — | **compressed** frames/bursts only |
 
 Why deadline+liveliness: a silent producer must be observable within seconds.
@@ -31,7 +32,8 @@ encodes the DDS Request-vs-Offered rules and the unit test locks them in.
 | `/heartbeat` | topic | every producer | `liveliness_status(0.5)` | **now** |
 | `PlanStep` | topic | edge planner | `control_cmd` (no fixed deadline) | planned (4.x) |
 | `Candidate[]` | sub-msg | edge | inherits carrying action result | planned (3.x) |
-| `/target_pixel` | topic | edge tracker | `detection_stream` (confirm consumer side only) | exists |
+| `/target_pixel` | topic | edge tracker | publisher: no-deadline BEST_EFFORT (sporadic); **consumer: `detection_stream_nodeadline`** — requesting `detection_stream`'s 1.5 s deadline drops every sample (must-fix #2, locked by `is_compatible` test) | exists |
+| `/target_prompt` | topic | Pi exec (`PromptBridge`) | `control_cmd_latched` — replaces `reliable_prompt_sender`; tracker sub should become TRANSIENT_LOCAL in 2.9 for late-join replay | planned (2.x) |
 | GetObservation `result.view` | action payload | Pi | CompressedImage only; `media_besteffort` if relayed | planned (3.5) |
 
 ## No raw depth / PointCloud2 over Wi-Fi (ROADMAP 1.4 / 3.5)

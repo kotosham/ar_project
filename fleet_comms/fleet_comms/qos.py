@@ -82,15 +82,38 @@ def correction_lowrate() -> QoSProfile:
 
 
 def detection_stream() -> QoSProfile:
-    """Lossy detection stream where only the freshest sample matters and stale
-    data is harmful: /target_pixel. deadline mirrors the consumer max_pixel_age_s
-    staleness gate so the freshness guard is QoS-observable."""
+    """OFFERED side of a *periodic* detection stream that can promise a rate: the
+    deadline (1.5 s) makes a stalled producer QoS-observable.
+
+    WARNING — do NOT request this on the /target_pixel CONSUMER. The edge tracker
+    publishes /target_pixel as a *sporadic* BEST_EFFORT stream with NO offered
+    deadline (only when a target is visible). A subscriber that REQUESTS a 1.5 s
+    deadline is Request-vs-Offered incompatible with that no-deadline publisher
+    (offered inf > requested 1.5 s) and silently receives ZERO samples. Use
+    detection_stream_nodeadline() on the consumer; freshness is enforced in
+    application code (ApproachDetection's max_pixel_age_s), not by QoS. See the
+    is_compatible test that locks this exact pair, and docs/qos_policy.md."""
     return QoSProfile(
         history=QoSHistoryPolicy.KEEP_LAST,
         depth=1,
         reliability=QoSReliabilityPolicy.BEST_EFFORT,
         durability=QoSDurabilityPolicy.VOLATILE,
         deadline=Duration(seconds=1.5),
+    )
+
+
+def detection_stream_nodeadline() -> QoSProfile:
+    """CONSUMER side of /target_pixel (must-fix #2). Same lossy freshest-only
+    stream as detection_stream() but requests NO deadline, so it is compatible
+    with the sporadic, no-deadline BEST_EFFORT tracker publisher (which would
+    otherwise drop every sample). Staleness is gated in application code
+    (max_pixel_age_s), which is the correct mechanism for an event-driven stream
+    that has no guaranteed rate."""
+    return QoSProfile(
+        history=QoSHistoryPolicy.KEEP_LAST,
+        depth=1,
+        reliability=QoSReliabilityPolicy.BEST_EFFORT,
+        durability=QoSDurabilityPolicy.VOLATILE,
     )
 
 
