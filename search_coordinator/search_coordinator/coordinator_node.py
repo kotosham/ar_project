@@ -15,6 +15,8 @@ from rclpy.node import Node
 from fleet_comms.heartbeat import HeartbeatMonitor, HeartbeatPublisher
 
 from search_coordinator.mission_state import MissionState
+from search_coordinator.prompt_bridge import PromptBridge
+from search_coordinator.seek_object_server import SeekObjectServer
 from search_coordinator.skills import Nav2Driver, build_all_skills
 
 
@@ -44,13 +46,17 @@ class SearchCoordinator(Node):
         self.skills = build_all_skills(self, self.mission_state, self.nav_driver)
 
         # Phase 2.5: keep the heartbeat publisher + monitor aligned with the
-        # mission epoch so zombie beats from a previous mission are ignored
-        # (must-fix #8). The SeekObject FSM (Phase 2.2) calls this on every
-        # ABORT-AND-RESET / new instruction.
+        # mission epoch so zombie beats from a previous mission are ignored.
         self.sync_mission_epoch()
 
+        # Phase 2.2: prompt bridge + SeekObject entry server + FSM. The server
+        # owns the mission and drives the skills via loopback action clients.
+        self.prompt_bridge = PromptBridge(self)
+        self.seek_object = SeekObjectServer(
+            self, self.mission_state, self.prompt_bridge, self.sync_mission_epoch)
+
         self.get_logger().info(
-            'search_coordinator up (Phase 2.4): skill servers %s; epoch=%d.'
+            'search_coordinator up (Phase 2.2): SeekObject entry + skills %s; epoch=%d.'
             % (sorted(self.skills.keys()), self.mission_state.current_epoch()))
 
     def sync_mission_epoch(self) -> None:
