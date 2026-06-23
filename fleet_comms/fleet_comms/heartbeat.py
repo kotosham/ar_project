@@ -58,6 +58,10 @@ class HeartbeatPublisher:
     def set_mission_epoch(self, epoch: int) -> None:
         self._mission_epoch = int(epoch)
 
+    def stop(self) -> None:
+        """Stop beating (on shutdown) so peers observe liveliness loss promptly."""
+        self._timer.cancel()
+
     def _tick(self) -> None:
         msg = Heartbeat()
         msg.header.stamp = self._node.get_clock().now().to_msg()
