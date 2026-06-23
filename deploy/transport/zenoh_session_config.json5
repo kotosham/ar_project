@@ -1,0 +1,30 @@
+// rmw_zenoh session (node) config — ROADMAP Phase 1.1.
+//
+// Deploy on EVERY host that runs ROS nodes (Pi executive + edge perception).
+// Used by all rclcpp/rclpy processes when:
+//   export RMW_IMPLEMENTATION=rmw_zenoh_cpp
+//   export ZENOH_SESSION_CONFIG_URI=/etc/zenoh/zenoh_session_config.json5
+// (see transport_env.sh).
+//
+// Replace EDGE_HOST with the edge router's IP/hostname. You can also override at
+// runtime without editing this file:
+//   export ZENOH_CONFIG_OVERRIDE='connect/endpoints=["tcp/192.168.1.10:7447"]'
+// For a single-host smoke test, point connect at tcp/localhost:7447.
+{
+  mode: "peer",
+
+  // Multicast OFF: never auto-discover on the LAN, only via the edge router +
+  // gossip. This is the whole point of the single-router topology.
+  scouting: {
+    multicast: { enabled: false },
+    gossip: { enabled: true },
+  },
+
+  // Connect to the single edge router. 12 MB TCP buffers per link (bounded by
+  // net.core.{r,w}mem_max from 99-ros2-socket-buffers.conf).
+  connect: {
+    endpoints: [
+      "tcp/EDGE_HOST:7447#so_sndbuf=12582912;so_rcvbuf=12582912",
+    ],
+  },
+}

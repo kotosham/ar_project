@@ -1,0 +1,28 @@
+# rmw_zenoh router — ROADMAP Phase 1.1. Deploy on the EDGE host only.
+#
+# Install:
+#   sudo install -d /etc/zenoh
+#   sudo cp zenoh_router_config.json5 /etc/zenoh/
+#   sudo cp rmw-zenoh-router.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now rmw-zenoh-router
+# Logs: journalctl -u rmw-zenoh-router -f
+#
+# Adjust the ROS distro path and User= for the edge host.
+[Unit]
+Description=rmw_zenoh fleet router (ROADMAP Phase 1.1)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+Environment=RMW_IMPLEMENTATION=rmw_zenoh_cpp
+Environment=ZENOH_ROUTER_CONFIG_URI=/etc/zenoh/zenoh_router_config.json5
+ExecStart=/bin/bash -lc 'source /opt/ros/jazzy/setup.bash && exec ros2 run rmw_zenoh_cpp rmw_zenohd'
+Restart=on-failure
+RestartSec=2
+# A dead router must not silently fall back to multicast peer-to-peer.
+# Nodes will block on ZENOH_ROUTER_CHECK_ATTEMPTS until the router returns.
+
+[Install]
+WantedBy=multi-user.target

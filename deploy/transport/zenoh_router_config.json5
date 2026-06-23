@@ -1,0 +1,34 @@
+// rmw_zenoh router config — ROADMAP Phase 1.1.
+//
+// Deploy on the EDGE host as the single shared router for the whole fleet
+// (Pi executive + edge perception). Run via the rmw-zenoh-router.service unit,
+// or manually:
+//   RMW_IMPLEMENTATION=rmw_zenoh_cpp \
+//   ZENOH_ROUTER_CONFIG_URI=$(pwd)/zenoh_router_config.json5 \
+//   ros2 run rmw_zenoh_cpp rmw_zenohd
+//
+// Only the fields that matter are set here; zenoh fills everything else from its
+// built-in defaults (do NOT copy the verbose DEFAULT_RMW_ZENOH_ROUTER_CONFIG.json5
+// wholesale — its own header warns against it).
+{
+  mode: "router",
+
+  // Multicast scouting OFF on the shared Wi-Fi: no UDP multicast discovery
+  // storms / AP flooding. Sessions discover each other through this router via
+  // gossip. (The shipped defaults already disable multicast — set explicitly so
+  // the intent is self-documenting and survives upstream default changes.)
+  scouting: {
+    multicast: { enabled: false },
+    gossip: { enabled: true },
+  },
+
+  // Listen on all interfaces, default zenoh port 7447. 12 MB TCP socket buffers
+  // absorb image/scan bursts without head-of-line stalls; pair with the OS-level
+  // limits in 99-ros2-socket-buffers.conf (the #so_*buf hints can only grow up
+  // to net.core.{r,w}mem_max).
+  listen: {
+    endpoints: [
+      "tcp/[::]:7447#so_sndbuf=12582912;so_rcvbuf=12582912",
+    ],
+  },
+}
