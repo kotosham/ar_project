@@ -21,6 +21,7 @@ setup(
         'console_scripts': [
             'coordinator_node = search_coordinator.coordinator_node:main',
             'map_odom_relay = search_coordinator.map_odom_relay:main',
+            'frontier_extractor = search_coordinator.frontier_node:main',
         ],
     },
 )

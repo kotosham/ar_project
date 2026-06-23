@@ -16,6 +16,8 @@ find_package(object_tracking_msgs REQUIRED)
 rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/MapOdomCorrection.msg"
   "msg/Heartbeat.msg"
+  "msg/Frontier.msg"
+  "msg/FrontierArray.msg"
   "srv/SetMode.srv"
   "action/ExploreFrontier.action"
   "action/GoToPose.action"
