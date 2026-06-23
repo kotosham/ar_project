@@ -76,8 +76,6 @@ install(
     scripts/experiment_metrics_logger.py
     scripts/home_pose_manager.py
     scripts/odom_to_tf.py
-    scripts/reliable_prompt_sender.py
-    scripts/target_pixel_to_goal.py
     scripts/tracker_rgb_bridge.py
     scripts/tracker_rgbd_bridge.py
     scripts/twist_to_twist_stamped.py
