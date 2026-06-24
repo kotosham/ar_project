@@ -6,6 +6,7 @@ in skills.py are thin glue around these.
 """
 from __future__ import annotations
 
+import math
 from typing import List, Optional, Tuple
 
 # Mirrors action_msgs/msg/GoalStatus.STATUS_SUCCEEDED without importing it here.
@@ -36,6 +37,34 @@ def resolve_frontier(frontiers: list, frontier_id: int,
                 return f, 'OK'
         return None, 'NO_MATCH'
     return candidates[0], 'OK'
+
+
+def explore_goal_xy(robot_xy: Tuple[float, float],
+                    centroid_xy: Tuple[float, float],
+                    min_drive_m: float,
+                    standoff_m: float) -> Tuple[float, float, float]:
+    """Project a NavigateToPose goal for frontier exploration.
+
+    Aim from the robot toward the frontier centroid and push the goal
+    `standoff_m` *past* it (into the unknown side of the free/unknown boundary),
+    clamped so the goal is at least `min_drive_m` from the robot. This avoids the
+    degenerate cold-start where the centroid sits inside Nav2's xy_goal_tolerance:
+    a goal AT the centroid is reported 'reached' instantly, the robot never moves,
+    the SLAM grid never grows and no new frontiers appear. Driving past the
+    boundary forces real forward progress that reveals new space.
+
+    Returns (goal_x, goal_y, yaw). Falls back to the centroid (yaw 0.0) when the
+    robot is already on top of it (direction undefined).
+    """
+    rx, ry = robot_xy
+    cx, cy = centroid_xy
+    dx, dy = cx - rx, cy - ry
+    dist = math.hypot(dx, dy)
+    if dist < 1e-6:
+        return cx, cy, 0.0
+    ux, uy = dx / dist, dy / dist
+    goal_d = max(dist + standoff_m, min_drive_m)
+    return rx + ux * goal_d, ry + uy * goal_d, math.atan2(uy, ux)
 
 
 def approach_not_reached_outcome(have_pixel: bool) -> str:

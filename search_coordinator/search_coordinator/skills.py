@@ -50,6 +50,7 @@ from search_coordinator import approach_geometry as ag
 from search_coordinator.mission_state import RequestDedup
 from search_coordinator.skill_logic import (
     approach_not_reached_outcome,
+    explore_goal_xy,
     is_fresh,
     nav_succeeded,
     resolve_frontier,
@@ -228,6 +229,12 @@ class ExploreFrontierServer(SkillServer):
         super().__init__(node, mission_state, nav_driver)
         self._frontiers = None
         self._sub_group = ReentrantCallbackGroup()
+        self.tf_buffer = Buffer()
+        self.tf_listener = TransformListener(self.tf_buffer, node)
+        node.declare_parameter('explore_map_frame', 'map')
+        node.declare_parameter('explore_robot_frame', 'base_link')
+        node.declare_parameter('explore_standoff_m', 0.4)
+        node.declare_parameter('explore_min_drive_m', 0.5)
         node.create_subscription(FrontierArray, '/frontiers', self._on_frontiers,
                                  _latched_qos(), callback_group=self._sub_group)
 
@@ -245,16 +252,38 @@ class ExploreFrontierServer(SkillServer):
             result.outcome = ExploreFrontier.Result.NO_FRONTIER
             return 'abort', result
 
+        map_frame = (snap.header.frame_id or
+                     self.node.get_parameter('explore_map_frame').value)
+        robot_frame = self.node.get_parameter('explore_robot_frame').value
+        cx, cy = float(sel.centroid.x), float(sel.centroid.y)
+        # Default to the raw centroid; project past it once we know where we are.
+        gx, gy, yaw = cx, cy, 0.0
+        try:
+            tf_rob = self.tf_buffer.lookup_transform(map_frame, robot_frame,
+                                                     rclpy.time.Time())
+            rx = tf_rob.transform.translation.x
+            ry = tf_rob.transform.translation.y
+            gx, gy, yaw = explore_goal_xy(
+                (rx, ry), (cx, cy),
+                self.node.get_parameter('explore_min_drive_m').value,
+                self.node.get_parameter('explore_standoff_m').value)
+        except (LookupException, ConnectivityException, ExtrapolationException):
+            self.node.get_logger().warn(
+                'explore_frontier: no %s->%s TF; driving to raw centroid'
+                % (map_frame, robot_frame))
+
         pose = PoseStamped()
-        pose.header.frame_id = (snap.header.frame_id or 'map')
+        pose.header.frame_id = map_frame
         pose.header.stamp = self.node.get_clock().now().to_msg()
-        pose.pose.position = Point(x=float(sel.centroid.x), y=float(sel.centroid.y), z=0.0)
-        pose.pose.orientation.w = 1.0
+        pose.pose.position = Point(x=gx, y=gy, z=0.0)
+        qz, qw = ag.yaw_to_quaternion_zw(yaw)
+        pose.pose.orientation.z = qz
+        pose.pose.orientation.w = qw
         self.node.get_logger().info(
-            'explore_frontier: drive to frontier id=%d centroid=(%.2f,%.2f) score=%.1f '
-            'dist=%.2f frame=%s (of %d frontiers)'
-            % (sel.id, sel.centroid.x, sel.centroid.y, sel.score, sel.distance_m,
-               pose.header.frame_id, len(frontiers)))
+            'explore_frontier: drive to frontier id=%d centroid=(%.2f,%.2f) '
+            'goal=(%.2f,%.2f) score=%.1f dist=%.2f frame=%s (of %d frontiers)'
+            % (sel.id, cx, cy, gx, gy, sel.score, sel.distance_m,
+               map_frame, len(frontiers)))
 
         def tick(dist):
             fb = ExploreFrontier.Feedback()
