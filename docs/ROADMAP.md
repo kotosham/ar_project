@@ -55,14 +55,14 @@
 - [x] **EXIT:** VLM-режим декомпозирует высокоуровневую инструкцию, периодически перепланирует по истории, не попадает на реактивный путь, не простаивает между replan’ами (нет «wasted actions»), бюджет токенов ограничен. — Инструкция раскладывается в атомарные действия; периодический реплан (N); VLM вне реактивного пути (исполнитель владеет движением, circuit-breaker degrade); **нет простоя между реплана­ми** (4.6, проверено живьём ~2с/шаг); бюджет токенов ограничен (`token_estimate` + `max_steps`). _Caveat: ПОЛНЫЙ одновременный live-DRIVE — RAM-лимит 7.4 ГБ хоста (см. Phase 3)._
 
 ### Phase 5 — Hardening деградации + FMEA-тесты в симуляции
-- [ ] 5.1 `[FMEA]` Бесшовная деградация VLM→FLAT при потере VLM/edge/Wi-Fi (heartbeat DOWN или circuit-breaker open): миссия продолжается как FLAT, результат может быть `DEGRADED_SUCCESS`.
-- [ ] 5.2 `[FMEA]` Тест инъекции stale TF / просроченной `MapOdomCorrection`: `map_odom_relay` держит last-good и не пропускает скачок/устаревшую коррекцию.
-- [ ] 5.3 `[FMEA]` Тест скачка локализации (`relocalized=true`): гейтинг скачка, отсутствие «телепортации» цели.
-- [ ] 5.4 `[FMEA]` Тест потери edge посреди подъезда: нет ложного reached; переход в FLAT/повторный поиск.
-- [ ] 5.5 `[FMEA]` Тест bus-off и fault EPOS4 в движении: подтверждённый quick-stop (повтор Phase 0 в полном пайплайне).
-- [ ] 5.6 Тест instruction-change mid-mission: ABORT-and-reset, отсутствие исполнения «зомби»-UUID прежней эпохи.
-- [ ] 5.7 Тест осцилляции фронтиров под шумом: гистерезис удерживает выбор.
-- [ ] **EXIT:** полный FMEA-набор в Gazebo зелёный; каждый сценарий отказа приводит к безопасному и предсказуемому поведению; деградация VLM→FLAT воспроизводимо бесшовна.
+- [x] 5.1 `[FMEA]` Бесшовная деградация VLM→FLAT при потере VLM/edge/Wi-Fi (heartbeat DOWN или circuit-breaker open): миссия продолжается как FLAT, результат может быть `DEGRADED_SUCCESS`. — `DegradationLatch` (planner_logic): при open circuit-breaker оркестратор латчится на FLAT-fallback (`MockPlanner`), миссия ПРОДОЛЖАЕТСЯ (DEGRADED), не флапает обратно. 4 unit-теста. **Live:** мёртвый VLM-endpoint → 3× connection-refused → cb OPEN → degrade → 6 FLAT-шагов `DRIVE_TO_VISIBLE` по реальной детекции → mission ended (DEGRADED), без остановки.
+- [x] 5.2 `[FMEA]` Тест инъекции stale TF / просроченной `MapOdomCorrection`: `map_odom_relay` держит last-good и не пропускает скачок/устаревшую коррекцию. — Покрыто `test_map_odom_relay_logic.py` (Phase 2.6): гейты seq (wrap-safe), stamp/age, last-good, ребродкаст identity до первой коррекции.
+- [x] 5.3 `[FMEA]` Тест скачка локализации (`relocalized=true`): гейтинг скачка, отсутствие «телепортации» цели. — Покрыто (Phase 2.6): jump-гейт принимает большой скачок ТОЛЬКО при `relocalized=true`, иначе drop + last-good (нет телепортации).
+- [x] 5.4 `[FMEA]` Тест потери edge посреди подъезда: нет ложного reached; переход в FLAT/повторный поиск. — FMEA-тест `is_fresh`: устаревший/отсутствующий пиксель НЕ свежий → `ApproachDetection` отдаёт STALE_DETECTION/LOST_TARGET (без ложного reached); FLAT-продолжение — через 5.1.
+- [ ] 5.5 `[FMEA]` Тест bus-off и fault EPOS4 в движении: подтверждённый quick-stop (повтор Phase 0 в полном пайплайне). — **HIL-only**: в Gazebo нет CAN/EPOS4. Латч quick-stop + fault-poll готовы (0.2/0.3); подтверждение — на стенде (см. 0.4/0.7/6.2).
+- [x] 5.6 Тест instruction-change mid-mission: ABORT-and-reset, отсутствие исполнения «зомби»-UUID прежней эпохи. — FMEA-тест: смена инструкции → `start_mission`/`abort_and_reset` bump эпохи → in-flight UUID становится зомби (`is_current`=false); `RequestDedup` чистит кэш на смене эпохи (нет зомби-replay).
+- [x] 5.7 Тест осцилляции фронтиров под шумом: гистерезис удерживает выбор. — FMEA-тест `should_switch`: суб-margin шум на конкуренте НЕ переключает committed; переключение только при beat > margin И dwell ≥ min; мгновенно если committed исчез.
+- [x] **EXIT:** полный FMEA-набор в Gazebo зелёный; каждый сценарий отказа приводит к безопасному и предсказуемому поведению; деградация VLM→FLAT воспроизводимо бесшовна. — Sim-FMEA зелёный (5.1 live + 5.2/5.3/5.4/5.6/5.7 тесты, 77/77 search_coordinator + 45/45 planner); деградация VLM→FLAT воспроизводима живьём. _Единственный не-Gazebo пункт — 5.5 (CAN bus-off/EPOS4), физически HIL: остаётся для стенда (0.4/0.7/6.2)._
 
 ### Phase 6 — Ввод в эксплуатацию на железе (hardware bring-up)
 - [ ] 6.1 `use_sim_time=False`, реальные часы, `chrony` на роботе; проверка offset на реальном Wi-Fi.
