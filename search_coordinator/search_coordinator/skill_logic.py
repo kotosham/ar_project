@@ -45,13 +45,18 @@ def explore_goal_xy(robot_xy: Tuple[float, float],
                     standoff_m: float) -> Tuple[float, float, float]:
     """Project a NavigateToPose goal for frontier exploration.
 
-    Aim from the robot toward the frontier centroid and push the goal
-    `standoff_m` *past* it (into the unknown side of the free/unknown boundary),
-    clamped so the goal is at least `min_drive_m` from the robot. This avoids the
-    degenerate cold-start where the centroid sits inside Nav2's xy_goal_tolerance:
-    a goal AT the centroid is reported 'reached' instantly, the robot never moves,
-    the SLAM grid never grows and no new frontiers appear. Driving past the
-    boundary forces real forward progress that reveals new space.
+    Aim from the robot toward the frontier centroid (a FREE cell on the
+    free/unknown boundary), clamped so the goal is at least `min_drive_m` from
+    the robot. The clamp avoids the degenerate cold-start where the centroid
+    sits inside Nav2's xy_goal_tolerance: a goal AT the centroid is reported
+    'reached' instantly, the robot never moves, the SLAM grid never grows and no
+    new frontiers appear.
+
+    `standoff_m` optionally pushes the goal that far PAST the centroid into the
+    unknown side. Keep it small (0.0 by default): a goal placed deep in unknown
+    space is uncosted, so the global planner aborts and Nav2 wastes seconds on
+    recovery behaviours. With standoff 0 the goal stays on the free centroid and
+    the robot still grows the map by sensing past the boundary once it arrives.
 
     Returns (goal_x, goal_y, yaw). Falls back to the centroid (yaw 0.0) when the
     robot is already on top of it (direction undefined).

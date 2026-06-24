@@ -233,8 +233,12 @@ class ExploreFrontierServer(SkillServer):
         self.tf_listener = TransformListener(self.tf_buffer, node)
         node.declare_parameter('explore_map_frame', 'map')
         node.declare_parameter('explore_robot_frame', 'base_link')
-        node.declare_parameter('explore_standoff_m', 0.4)
-        node.declare_parameter('explore_min_drive_m', 0.5)
+        # standoff 0.0 => aim at the (free) frontier centroid, not into unknown:
+        # a goal in unknown space makes the global planner abort and Nav2 burns
+        # seconds on recovery behaviours. min_drive 0.25 (> xy_goal_tolerance 0.10)
+        # guarantees real motion without a degenerate instant 'reached'.
+        node.declare_parameter('explore_standoff_m', 0.0)
+        node.declare_parameter('explore_min_drive_m', 0.25)
         node.create_subscription(FrontierArray, '/frontiers', self._on_frontiers,
                                  _latched_qos(), callback_group=self._sub_group)
 

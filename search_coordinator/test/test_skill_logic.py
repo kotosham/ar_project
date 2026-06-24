@@ -102,3 +102,20 @@ def test_explore_goal_degenerate_robot_on_centroid():
     gx, gy, yaw = explore_goal_xy((1.5, -0.5), (1.5, -0.5),
                                   min_drive_m=0.5, standoff_m=0.4)
     assert (gx, gy, yaw) == (1.5, -0.5, 0.0)
+
+
+def test_explore_goal_standoff0_aims_at_free_centroid():
+    # Default standoff 0.0: a centroid beyond min_drive is the goal verbatim, so
+    # the goal stays in known-free space (planner never aborts into unknown).
+    gx, gy, yaw = explore_goal_xy((0.0, 0.0), (0.40, 0.0),
+                                  min_drive_m=0.25, standoff_m=0.0)
+    assert math.isclose(gx, 0.40, abs_tol=1e-6)
+    assert math.isclose(gy, 0.0, abs_tol=1e-6)
+
+
+def test_explore_goal_standoff0_still_clamps_close_centroid():
+    # Centroid inside min_drive: clamp out to min_drive so the robot still moves.
+    gx, gy, yaw = explore_goal_xy((0.0, 0.0), (0.10, 0.0),
+                                  min_drive_m=0.25, standoff_m=0.0)
+    assert math.isclose(gx, 0.25, abs_tol=1e-6)
+    assert math.isclose(gy, 0.0, abs_tol=1e-6)
