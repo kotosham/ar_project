@@ -1,0 +1,9 @@
+# Deploy: never commit the filled-in host/credential config (keep only the example).
+deploy/build/deploy.env
+*.env
+!*.env.example
+
+# colcon / ROS build artifacts
+build/
+install/
+log/
