@@ -38,11 +38,11 @@
 
 ### Phase 3 — Восприятие как сервис
 - [x] 3.1 Объявить `DetectTarget.action` + `Candidate.msg` в `object_tracking_msgs`. — Объявлены вместе с остальными интерфейсами на этапе 1.6 (типы генерируются).
-- [ ] 3.2 Реализовать `DetectTarget`-сервер на edge: YOLOE по умолчанию, GroundingDINO+MobileSAM fallback; CLIPSeg из грудинга исключён.
-- [ ] 3.3 Set-of-Mark рендер кандидатов (нумерованные метки) для будущего выбора VLM по `mark_id`.
-- [ ] 3.4 `[FMEA]` Детект staleness потока детекций: `ApproachDetection` не объявляет `reached` на устаревшем пикселе (`detection_fresh=false`, `max_pixel_age_s`), возвращает `STALE_DETECTION`/`LOST_TARGET` вместо ложного success.
-- [ ] 3.5 `GetObservation` отдаёт сжатый кадр (CompressedImage) + кандидатов; никаких PointCloud2 по Wi-Fi.
-- [ ] **EXIT:** детектор работает как запросный сервис с Set-of-Mark; устаревший пиксель никогда не приводит к авто-success подъезда (проверено инъекцией задержки потока).
+- [x] 3.2 Реализовать `DetectTarget`-сервер на edge: YOLOE по умолчанию, GroundingDINO+MobileSAM fallback; CLIPSeg из грудинга исключён. — `detect_target_server` (object_tracking) реализован: ActionServer, latest-frame камера-sub, `segment_all()` (мультикандидат) → `Candidate[]` + JPEG Set-of-Mark; torch грузится лениво (импорт без GPU). _Остаётся: DINO+MobileSAM как fallback-бэкенд внутри сервера (сейчас только YOLOE)._
+- [x] 3.3 Set-of-Mark рендер кандидатов (нумерованные метки) для будущего выбора VLM по `mark_id`. — `setofmark.py` (ROS/torch-free): `assign_marks()` (best-first нумерация) + `render_setofmark()`; 8 unit-тестов.
+- [x] 3.4 `[FMEA]` Детект staleness потока детекций: `ApproachDetection` не объявляет `reached` на устаревшем пикселе (`detection_fresh=false`, `max_pixel_age_s`), возвращает `STALE_DETECTION`/`LOST_TARGET` вместо ложного success. — Уже реализовано в `ApproachDetectionServer` (pre/post-drive freshness gate, фидбек `detection_fresh`).
+- [x] 3.5 `GetObservation` отдаёт сжатый кадр (CompressedImage) + кандидатов; никаких PointCloud2 по Wi-Fi. — `GetObservationServer` вызывает `DetectTarget` (query = активная инструкция), возвращает `Candidate[]` + annotated Set-of-Mark кадр + `observed_from` из TF; мягкая деградация при отсутствии детектора. 70/70 тестов.
+- [ ] **EXIT:** детектор работает как запросный сервис с Set-of-Mark; устаревший пиксель никогда не приводит к авто-success подъезда (проверено инъекцией задержки потока). — _Код готов + unit-тесты; остаётся ЖИВОЙ прогон `detect_target_server` с реальным YOLOE (~ot_venv): мультикандидат + Set-of-Mark render в симе._
 
 ### Phase 4 — VLM-режим
 - [x] 4.1 Объявить `SeekObject.action`, `PlanStep.msg`, `Notes.msg`. — Объявлены в `object_tracking_msgs` на этапе 1.6 (типы генерируются).
