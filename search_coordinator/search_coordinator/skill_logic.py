@@ -96,3 +96,14 @@ def is_fresh(age_s: Optional[float], max_age_s: float) -> bool:
 def nav_succeeded(status: int) -> bool:
     """Map a Nav2 action GoalStatus to a reached/ok boolean."""
     return status == GOAL_STATUS_SUCCEEDED
+
+
+def should_blacklist_frontier(drive_terminal: str) -> bool:
+    """Should a failed ExploreFrontier drive blacklist the frontier as unreachable?
+
+    Only a GENUINE nav failure while Nav2 was actually driving ('rejected'/'failed')
+    means the frontier is unreachable. 'no_server' (Nav2 not ready / dropped) is
+    TRANSIENT -- blacklisting then would permanently exclude valid frontiers just
+    because Nav2 was still activating. reached/canceled/zombie are handled before
+    this and never blacklist."""
+    return drive_terminal in ('rejected', 'failed')

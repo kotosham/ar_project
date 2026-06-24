@@ -8,6 +8,7 @@ from search_coordinator.skill_logic import (
     is_fresh,
     nav_succeeded,
     resolve_frontier,
+    should_blacklist_frontier,
 )
 
 
@@ -85,6 +86,14 @@ def test_is_fresh():
 def test_nav_succeeded():
     assert nav_succeeded(4) is True    # STATUS_SUCCEEDED
     assert nav_succeeded(6) is False   # STATUS_ABORTED
+
+
+def test_no_server_does_not_blacklist():
+    # Nav2 not ready / dropped -> transient, must NOT blacklist the frontier.
+    assert should_blacklist_frontier('no_server') is False
+    # genuine nav failures while driving -> blacklist (frontier really unreachable).
+    assert should_blacklist_frontier('rejected') is True
+    assert should_blacklist_frontier('failed') is True
 
 
 def test_explore_goal_coldstart_clamps_to_min_drive():

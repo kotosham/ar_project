@@ -55,6 +55,7 @@ from search_coordinator.skill_logic import (
     is_fresh,
     nav_succeeded,
     resolve_frontier,
+    should_blacklist_frontier,
 )
 
 
@@ -242,6 +243,10 @@ class ExploreFrontierServer(SkillServer):
         # guarantees real motion without a degenerate instant 'reached'.
         node.declare_parameter('explore_standoff_m', 0.0)
         node.declare_parameter('explore_min_drive_m', 0.25)
+        # How long to wait for Nav2 navigate_to_pose to be ready before a drive.
+        # Absorbs Nav2 lifecycle activation at mission start so a not-yet-up server
+        # is NOT mistaken for an unreachable frontier (no false blacklisting).
+        node.declare_parameter('explore_nav_ready_timeout_s', 10.0)
         node.create_subscription(FrontierArray, '/frontiers', self._on_frontiers,
                                  _latched_qos(), callback_group=self._sub_group)
 
@@ -304,6 +309,17 @@ class ExploreFrontierServer(SkillServer):
             fb.frontier_score = float(sel.score)
             goal_handle.publish_feedback(fb)
 
+        # Gate on Nav2 readiness: a server still activating is NOT an unreachable
+        # frontier. Wait (bounded); if still down, abort transiently WITHOUT
+        # blacklisting so the FSM retries and the frontier stays a candidate.
+        ready_timeout = float(self.node.get_parameter('explore_nav_ready_timeout_s').value)
+        if not self.nav.server_available(ready_timeout):
+            self.node.get_logger().warn(
+                'explore_frontier: Nav2 navigate_to_pose not ready after %.1fs; '
+                'retry without blacklisting frontier id=%d' % (ready_timeout, sel.id))
+            result.outcome = ExploreFrontier.Result.ABORTED
+            return 'abort', result
+
         terminal, reached = self.nav.drive(goal_handle, pose, goal.mission_epoch,
                                            self.ms, tick)
         self.node.get_logger().info('explore_frontier: nav drive terminal=%s' % terminal)
@@ -317,12 +333,18 @@ class ExploreFrontierServer(SkillServer):
         if terminal == 'zombie':
             result.outcome = ExploreFrontier.Result.PREEMPTED
             return 'abort', result
-        # nav failed: blacklist this frontier so we try others instead of looping
-        # forever on an unreachable one (e.g. behind a wall).
-        self._failed_ids.add(sel.id)
-        self.node.get_logger().info(
-            'explore_frontier: frontier id=%d unreachable, blacklisted (%d total)'
-            % (sel.id, len(self._failed_ids)))
+        if should_blacklist_frontier(terminal):
+            # genuine nav failure (rejected/failed while driving): blacklist so we
+            # try others instead of looping on an unreachable frontier (behind a wall).
+            self._failed_ids.add(sel.id)
+            self.node.get_logger().info(
+                'explore_frontier: frontier id=%d unreachable, blacklisted (%d total)'
+                % (sel.id, len(self._failed_ids)))
+        else:
+            # transient (e.g. no_server): Nav2 not ready -- do NOT blacklist; retry.
+            self.node.get_logger().warn(
+                'explore_frontier: drive terminal=%s on frontier id=%d is transient; '
+                'NOT blacklisting' % (terminal, sel.id))
         result.outcome = ExploreFrontier.Result.ABORTED
         return 'abort', result
 
