@@ -228,6 +228,8 @@ class ExploreFrontierServer(SkillServer):
     def __init__(self, node, mission_state, nav_driver):
         super().__init__(node, mission_state, nav_driver)
         self._frontiers = None
+        self._failed_ids = set()       # frontier ids Nav2 failed to reach this mission
+        self._fail_epoch = None        # epoch the blacklist belongs to (cleared on new mission)
         self._sub_group = ReentrantCallbackGroup()
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, node)
@@ -248,11 +250,16 @@ class ExploreFrontierServer(SkillServer):
     def _run(self, goal_handle):
         goal = goal_handle.request
         result = ExploreFrontier.Result()
+        if goal.mission_epoch != self._fail_epoch:    # new mission -> fresh blacklist
+            self._failed_ids = set()
+            self._fail_epoch = goal.mission_epoch
         snap = self._frontiers
         frontiers = list(snap.frontiers) if snap is not None else []
-        sel, reason = resolve_frontier(frontiers, goal.frontier_id, goal.max_travel_m)
+        sel, reason = resolve_frontier(frontiers, goal.frontier_id, goal.max_travel_m,
+                                       exclude_ids=self._failed_ids)
         if sel is None:
-            self.node.get_logger().info('explore_frontier: NO_FRONTIER (%s)' % reason)
+            self.node.get_logger().info('explore_frontier: NO_FRONTIER (%s, %d blacklisted)'
+                                        % (reason, len(self._failed_ids)))
             result.outcome = ExploreFrontier.Result.NO_FRONTIER
             return 'abort', result
 
@@ -309,6 +316,12 @@ class ExploreFrontierServer(SkillServer):
         if terminal == 'zombie':
             result.outcome = ExploreFrontier.Result.PREEMPTED
             return 'abort', result
+        # nav failed: blacklist this frontier so we try others instead of looping
+        # forever on an unreachable one (e.g. behind a wall).
+        self._failed_ids.add(sel.id)
+        self.node.get_logger().info(
+            'explore_frontier: frontier id=%d unreachable, blacklisted (%d total)'
+            % (sel.id, len(self._failed_ids)))
         result.outcome = ExploreFrontier.Result.ABORTED
         return 'abort', result
 

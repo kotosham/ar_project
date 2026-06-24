@@ -53,6 +53,24 @@ def test_resolve_max_travel_keeps_near():
     assert reason == 'OK' and sel.id == 3
 
 
+def test_resolve_excludes_blacklisted_best():
+    fs = [F(7, 30.0, 1.0), F(3, 20.0, 2.0)]   # best-first; 7 blacklisted as unreachable
+    sel, reason = resolve_frontier(fs, -1, 0.0, exclude_ids={7})
+    assert reason == 'OK' and sel.id == 3
+
+
+def test_resolve_all_excluded():
+    fs = [F(7, 30.0, 1.0), F(3, 20.0, 2.0)]
+    sel, reason = resolve_frontier(fs, -1, 0.0, exclude_ids={7, 3})
+    assert sel is None and reason == 'EXCLUDED'
+
+
+def test_resolve_exclude_none_is_noop():
+    fs = [F(7, 30.0, 1.0), F(3, 20.0, 2.0)]
+    sel, reason = resolve_frontier(fs, -1, 0.0, exclude_ids=None)
+    assert reason == 'OK' and sel.id == 7
+
+
 def test_approach_outcome():
     assert approach_not_reached_outcome(have_pixel=False) == 'LOST_TARGET'
     assert approach_not_reached_outcome(have_pixel=True) == 'STALE_DETECTION'

@@ -14,21 +14,30 @@ GOAL_STATUS_SUCCEEDED = 4
 
 
 def resolve_frontier(frontiers: list, frontier_id: int,
-                     max_travel_m: float) -> Tuple[Optional[object], str]:
+                     max_travel_m: float,
+                     exclude_ids: Optional[set] = None) -> Tuple[Optional[object], str]:
     """Pick a frontier for ExploreFrontier.
 
     `frontiers` is best-first (each has .id, .score, .distance_m). `frontier_id`:
     -1 => best after hysteresis (the published order already encodes it); >=0 =>
     that stable id. `max_travel_m` > 0 filters out frontiers farther than the cap.
+    `exclude_ids` drops frontiers whose stable id is in the set — the explorer
+    blacklists a frontier after Nav2 fails to reach it, so it tries the others
+    and terminates cleanly once reachable space is exhausted instead of looping
+    forever on an unreachable (e.g. behind-a-wall) frontier.
 
     Returns (frontier_or_None, reason) with reason in
-    {'OK','EMPTY','NO_MATCH','TOO_FAR'}.
+    {'OK','EMPTY','EXCLUDED','NO_MATCH','TOO_FAR'}.
     """
     if not frontiers:
         return None, 'EMPTY'
     candidates = frontiers
+    if exclude_ids:
+        candidates = [f for f in candidates if f.id not in exclude_ids]
+        if not candidates:
+            return None, 'EXCLUDED'
     if max_travel_m and max_travel_m > 0.0:
-        candidates = [f for f in frontiers if f.distance_m <= max_travel_m]
+        candidates = [f for f in candidates if f.distance_m <= max_travel_m]
         if not candidates:
             return None, 'TOO_FAR'
     if frontier_id is not None and frontier_id >= 0:
