@@ -3,7 +3,7 @@ deploy/build/deploy.env
 *.env
 !*.env.example
 
-# colcon / ROS build artifacts
-build/
-install/
-log/
+# colcon / ROS build artifacts (root-anchored so deploy/build/ is NOT matched)
+/build/
+/install/
+/log/
