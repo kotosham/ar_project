@@ -42,6 +42,7 @@ from ar_project_msgs.action import (
     Stop,
 )
 from ar_project_msgs.msg import FrontierArray
+from object_tracking_msgs.action import DetectTarget
 
 from fleet_comms.qos import control_cmd_latched, detection_stream_nodeadline
 from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
@@ -458,15 +459,26 @@ def approach_not_reached_outcome_code(have_pixel):
 
 
 class GetObservationServer(SkillServer):
-    """Phase-2 functional stub: capture one CompressedImage from a real source if
-    one exists (else leave view empty — must-fix #3); candidates empty (detector
-    is Phase 3)."""
+    """Phase 3.5: capture an observation as a compressed frame + Set-of-Mark
+    candidates (no PointCloud2 over Wi-Fi). Calls the edge DetectTarget service
+    with the active mission instruction as the open-vocab query; the returned
+    Candidate[] and annotated Set-of-Mark frame are handed up so the VLM can pick
+    a target by mark_id. Degrades gracefully: if the detector is unavailable or
+    times out, returns the last raw camera frame with an empty candidate list
+    (still SUCCEEDED) rather than blocking the mission."""
     action_type = GetObservation
     action_name = 'get_observation'
 
-    def __init__(self, node, mission_state, nav_driver, image_topic='/tracker/color/image/compressed'):
+    def __init__(self, node, mission_state, nav_driver,
+                 image_topic='/tracker/color/image/compressed',
+                 detect_action_name='detect_target', detect_timeout_s=5.0,
+                 query_default='object', map_frame='map', robot_frame='base_link'):
         super().__init__(node, mission_state, nav_driver)
         self._last_image = None
+        self._detect_timeout_s = float(detect_timeout_s)
+        self._query_default = query_default
+        self._map_frame = map_frame
+        self._robot_frame = robot_frame
         self._sub_group = ReentrantCallbackGroup()
         q = QoSProfile(depth=1)
         q.history = HistoryPolicy.KEEP_LAST
@@ -474,20 +486,82 @@ class GetObservationServer(SkillServer):
         q.durability = DurabilityPolicy.VOLATILE
         node.create_subscription(CompressedImage, image_topic, self._on_image, q,
                                  callback_group=self._sub_group)
+        self._detect = ActionClient(node, DetectTarget, detect_action_name,
+                                    callback_group=ReentrantCallbackGroup())
+        self._tf = Buffer()
+        self._tfl = TransformListener(self._tf, node)
 
     def _on_image(self, msg):
         self._last_image = msg
 
     def _run(self, goal_handle):
+        goal = goal_handle.request
         result = GetObservation.Result()
+        result.observed_from = self._observed_from()
+
         fb = GetObservation.Feedback()
         fb.phase = 'CAPTURING'
         goal_handle.publish_feedback(fb)
-        if self._last_image is not None:
-            result.view = self._last_image
-        # candidates stay empty (detector is Phase 3)
+
+        detect = self._call_detect(goal)
+        if detect is not None and detect.outcome != DetectTarget.Result.ABORTED:
+            fb.phase = 'RENDERING'
+            goal_handle.publish_feedback(fb)
+            result.candidates = list(detect.candidates)
+            # prefer the annotated Set-of-Mark frame; fall back to the raw frame
+            if goal.with_setofmark and detect.annotated.data:
+                result.view = detect.annotated
+            elif self._last_image is not None:
+                result.view = self._last_image
+        elif self._last_image is not None:
+            result.view = self._last_image      # detector down -> image-only, no candidates
+
         result.outcome = GetObservation.Result.SUCCEEDED
         return 'succeed', result
+
+    def _observed_from(self):
+        pose = PoseStamped()
+        pose.header.frame_id = self._map_frame
+        pose.header.stamp = self.node.get_clock().now().to_msg()
+        try:
+            tf = self._tf.lookup_transform(self._map_frame, self._robot_frame,
+                                           rclpy.time.Time())
+            pose.pose.position.x = tf.transform.translation.x
+            pose.pose.position.y = tf.transform.translation.y
+            pose.pose.position.z = tf.transform.translation.z
+            pose.pose.orientation = tf.transform.rotation
+        except (LookupException, ConnectivityException, ExtrapolationException):
+            pass
+        return pose
+
+    def _call_detect(self, goal):
+        """Send a DetectTarget goal and block-poll its result (bounded). Returns the
+        DetectTarget.Result, or None if the server is absent / times out."""
+        if not self._detect.wait_for_server(timeout_sec=1.0):
+            self.node.get_logger().warning('get_observation: detect_target server absent')
+            return None
+        dg = DetectTarget.Goal()
+        dg.request_id = getattr(goal, 'request_id', '')
+        dg.mission_epoch = getattr(goal, 'mission_epoch', 0)
+        dg.query = self.ms.instruction or self._query_default
+        dg.render_setofmark = bool(goal.with_setofmark)
+        dg.conf_threshold = 0.0                 # detector uses its configured default
+        send_future = self._detect.send_goal_async(dg)
+        deadline = time.time() + self._detect_timeout_s
+        while not send_future.done():
+            if time.time() > deadline:
+                return None
+            time.sleep(0.02)
+        handle = send_future.result()
+        if handle is None or not handle.accepted:
+            return None
+        result_future = handle.get_result_async()
+        while not result_future.done():
+            if time.time() > deadline:
+                handle.cancel_goal_async()
+                return None
+            time.sleep(0.02)
+        return result_future.result().result
 
 
 class StopServer(SkillServer):
