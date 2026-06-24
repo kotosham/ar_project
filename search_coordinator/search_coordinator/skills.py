@@ -250,6 +250,11 @@ class ExploreFrontierServer(SkillServer):
         pose.header.stamp = self.node.get_clock().now().to_msg()
         pose.pose.position = Point(x=float(sel.centroid.x), y=float(sel.centroid.y), z=0.0)
         pose.pose.orientation.w = 1.0
+        self.node.get_logger().info(
+            'explore_frontier: drive to frontier id=%d centroid=(%.2f,%.2f) score=%.1f '
+            'dist=%.2f frame=%s (of %d frontiers)'
+            % (sel.id, sel.centroid.x, sel.centroid.y, sel.score, sel.distance_m,
+               pose.header.frame_id, len(frontiers)))
 
         def tick(dist):
             fb = ExploreFrontier.Feedback()
@@ -260,6 +265,7 @@ class ExploreFrontierServer(SkillServer):
 
         terminal, reached = self.nav.drive(goal_handle, pose, goal.mission_epoch,
                                            self.ms, tick)
+        self.node.get_logger().info('explore_frontier: nav drive terminal=%s' % terminal)
         if terminal == 'reached':
             result.outcome = ExploreFrontier.Result.SUCCEEDED
             result.reached_pose = reached
