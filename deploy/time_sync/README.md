@@ -1,26 +1,26 @@
-# Time sync (chrony) — ROADMAP Phase 1.2 [FMEA]
+# Синхронизация времени (chrony) — ROADMAP Phase 1.2 [FMEA]
 
-The Pi and edge must agree on time well within the matching windows the stack
-relies on, or TF lookups, depth↔color matching, and pixel-age gating silently
-break. chrony keeps the **relative** Pi↔edge offset tiny by making the edge the
-single fleet time master.
+Pi и edge должны согласовывать время с запасом внутри окон сопоставления, на
+которые опирается стек, иначе TF-запросы, сопоставление depth↔color и отсечение
+по возрасту пикселей будут незаметно ломаться. chrony удерживает **относительное**
+смещение Pi↔edge крошечным, делая edge единственным мастером времени для всего флота.
 
-| Window | Source | Budget |
+| Окно | Источник | Бюджет |
 |---|---|---|
 | TF `transform_tolerance` | `nav2_params.yaml`, EKF | **0.2 s** |
-| depth ↔ color match | RealSense / RTAB-Map | **0.35 s** |
-| pixel age (detections) | `ApproachDetection` (Phase 3.4) | **1.5 s** |
+| сопоставление depth ↔ color | RealSense / RTAB-Map | **0.35 s** |
+| возраст пикселей (детекции) | `ApproachDetection` (Phase 3.4) | **1.5 s** |
 
-Target: offset and RMS **≤ 0.02 s** (10% of the tightest 0.2 s window). On a LAN
-with a local server chrony normally reaches sub-millisecond, so the margin is large.
+Цель: смещение и RMS **≤ 0.02 s** (10% от самого жёсткого окна 0.2 s). В LAN
+с локальным сервером chrony обычно достигает субмиллисекундной точности, так что запас велик.
 
-## What goes where
+## Что куда
 
-| Artifact | Host | Path |
+| Артефакт | Хост | Путь |
 |---|---|---|
 | `chrony-edge.conf` | edge | `/etc/chrony/chrony.conf` |
-| `chrony-pi.conf` | Pi (edit `EDGE_HOST`) | `/etc/chrony/chrony.conf` |
-| `check_offset.sh` | both | run after sync |
+| `chrony-pi.conf` | Pi (правьте `EDGE_HOST`) | `/etc/chrony/chrony.conf` |
+| `check_offset.sh` | оба | запуск после синхронизации |
 
 ```bash
 # edge
@@ -31,17 +31,17 @@ sudo cp chrony-pi.conf /etc/chrony/chrony.conf && sudo systemctl restart chrony
 bash check_offset.sh
 ```
 
-`chronyc sources -v` should list the edge as the selected source (`*`), and
-`chronyc tracking` should show a Last/RMS offset far below 0.02 s.
+`chronyc sources -v` должна показывать edge как выбранный источник (`*`), а
+`chronyc tracking` — значение Last/RMS offset далеко ниже 0.02 s.
 
-## Verified vs. pending
+## Проверено vs. в ожидании
 
-- **Verified (single host, WSL):** both configs parse cleanly (`chronyd -p`).
-- **Pending (needs 2 hosts — Pi + edge):** the actual offset proof. WSL2's clock
-  is host-managed, so a real disciplining run + `check_offset.sh` PASS belongs on
-  the deployed Pi+edge pair (with the Phase 1.1 zenoh link up). This is the gate
-  for the Phase 1 EXIT jitter budget.
+- **Проверено (один хост, WSL):** обе конфигурации разбираются без ошибок (`chronyd -p`).
+- **В ожидании (нужны 2 хоста — Pi + edge):** фактическое доказательство смещения. Часы WSL2
+  управляются хостом, поэтому реальный прогон дисциплинирования + PASS для `check_offset.sh`
+  относятся к развёрнутой паре Pi+edge (с поднятой связью zenoh из Phase 1.1). Это и есть гейт
+  для бюджета джиттера Phase 1 EXIT.
 
-> NOTE: WSL2 syncs its clock from the Windows host via Hyper-V; do **not** run a
-> competing `chronyd` inside WSL for development — these configs are for the
-> deployed Pi/edge Linux hosts.
+> NOTE: WSL2 синхронизирует свои часы с Windows-хостом через Hyper-V; **не** запускайте
+> конкурирующий `chronyd` внутри WSL для разработки — эти конфигурации предназначены для
+> развёрнутых Linux-хостов Pi/edge.

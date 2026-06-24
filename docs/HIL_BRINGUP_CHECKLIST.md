@@ -1,92 +1,89 @@
-# HIL bring-up checklist — connecting `robust` to the real robot
+# Чек-лист ввода в эксплуатацию на HIL — подключение `robust` к реальному роботу
 
-Everything in `robust` is validated in Gazebo. This is the procedure for the gates
-that **simulation physically cannot cover** — CAN/EPOS4 motor safety, real time-sync
-jitter, RealSense + Pi CPU budget, and field degradation. Do these **in order**; do
-NOT run an autonomous mission before the safety section (B) is green.
+Всё в `robust` проверено в Gazebo. Это процедура для тех проверок, которые **симуляция физически не может покрыть** — безопасность моторов CAN/EPOS4, джиттер реальной time-sync (синхронизации времени), бюджет CPU для RealSense + Pi и деградация в полевых условиях. Выполняйте их **по порядку**; НЕ запускайте автономную миссию до того, как раздел безопасности (B) станет зелёным.
 
-Tiers: **Pi** runs the executive (`search_coordinator`) + ros2_control HW interface
-(`embodied_robot_system`) + RealSense + local `/scan` + lightened Nav2 + `map_odom_relay`.
-**Edge** (GPU box) runs RTAB-Map SLAM + `detect_target_server` (YOLOE) + `planner_orchestrator`.
+Уровни: **Pi** запускает executive (`search_coordinator`) + HW-интерфейс ros2_control
+(`embodied_robot_system`) + RealSense + локальный `/scan` + облегчённый Nav2 + `map_odom_relay`.
+**Edge** (GPU-машина) запускает RTAB-Map SLAM + `detect_target_server` (YOLOE) + `planner_orchestrator`.
 
 ---
 
-## A. Prerequisites
-- [ ] Robot on a **stand with wheels off the ground** for all of section B (motors will move).
-- [ ] Physical e-stop within reach and tested before energizing.
-- [ ] CAN wiring + termination verified; EPOS4 IDs match `config/epos4_diffdrive/bus.yml`
-      (node ids, `.eds` = `maxon_motor_EPOS4_*`). `ip link` shows `can0` up at the bus bitrate.
-- [ ] `use_sim_time:=False` everywhere on hardware (ROADMAP 0.1 ✅ — confirm at runtime,
-      not just in yaml).
+## A. Предварительные условия
+- [ ] Робот на **стенде с колёсами над землёй** на весь раздел B (моторы будут вращаться).
+- [ ] Физический e-stop (аварийный останов) в пределах досягаемости и проверен до подачи питания.
+- [ ] Проводка CAN + терминирование проверены; ID EPOS4 совпадают с `config/epos4_diffdrive/bus.yml`
+      (node id, `.eds` = `maxon_motor_EPOS4_*`). `ip link` показывает `can0` поднятым на битрейте шины.
+- [ ] `use_sim_time:=False` везде на железе (ROADMAP 0.1 ✅ — подтвердите во время выполнения,
+      а не только в yaml).
 
-## B. Motor safety (HIL) — gates ROADMAP 0.2/0.3/0.4/0.7 + 5.5. **Wheels off ground.**
-1. [ ] **CAN/EPOS4 up** (6.2): bring up `hardware_bringup.launch.py`, confirm the lely
-       master reaches **Operation Enabled** on both drives (statusword `0x6041`), wheels
-       commandable via a tiny `/cmd_vel`.
-2. [ ] **Quick-stop latch (0.2)** — the sim-unverifiable one. Trigger `request_quick_stop()`
-       (e.g. publish `/quick_stop_trigger`) **while a wheel is spinning** and confirm on a
-       CAN sniffer that the drive enters **Quick Stop Active** (statusword), not merely
-       `0x60FF`=0. If `handleWrite()` overwrites controlword back to `0x000F`, switch to the
-       driver's `halt()`/CiA-402 quick-stop API (noted in `embodied_robot_system.cpp`).
-3. [ ] **Per-cycle fault reaction (0.3)** — induce an EPOS4 fault (e.g. brief overcurrent /
-       pull a feedback connector) mid-spin; confirm the fault-bit poll triggers a coordinated
-       quick-stop on **both** wheels within ≤100 ms (decimation=5 @50 Hz).
-4. [ ] **CAN bus-off (0.4 / 5.5)** — physically yank `can0` (or inject bus-off); confirm
-       commands zero safely and a controlled NMT recovery (currently the latch is the reaction
-       point — verify behavior and implement recovery if the link API allows).
-5. [ ] **Stop.action → hardware (0.7)** — send `Stop` with `QUICK_STOP_REQUEST`; confirm it
-       reaches the hardware quick-stop and the server reports `zero_velocity_confirmed` (via
+## B. Безопасность моторов (HIL) — проверки ROADMAP 0.2/0.3/0.4/0.7 + 5.5. **Колёса над землёй.**
+1. [ ] **CAN/EPOS4 поднят** (6.2): запустите `hardware_bringup.launch.py`, подтвердите, что lely
+       master достигает состояния **Operation Enabled** на обоих приводах (statusword `0x6041`), колёса
+       управляемы через крошечный `/cmd_vel`.
+2. [ ] **Защёлка quick-stop (0.2)** — та, что не проверяется в симуляции. Сработайте `request_quick_stop()`
+       (например, опубликуйте `/quick_stop_trigger`) **пока колесо вращается** и подтвердите на
+       CAN-снифере, что привод входит в **Quick Stop Active** (statusword), а не просто
+       `0x60FF`=0. Если `handleWrite()` перезаписывает controlword обратно в `0x000F`, переключитесь на
+       `halt()`/CiA-402 quick-stop API драйвера (отмечено в `embodied_robot_system.cpp`).
+3. [ ] **Реакция на неисправность за цикл (0.3)** — спровоцируйте неисправность EPOS4 (например, кратковременную перегрузку по току /
+       выдерните разъём обратной связи) во время вращения; подтвердите, что опрос бита неисправности запускает скоординированный
+       quick-stop на **обоих** колёсах за ≤100 ms (decimation=5 @50 Hz).
+4. [ ] **CAN bus-off (0.4 / 5.5)** — физически выдерните `can0` (или инжектируйте bus-off); подтвердите, что
+       команды безопасно обнуляются и происходит контролируемое восстановление NMT (сейчас защёлка является точкой
+       реакции — проверьте поведение и реализуйте восстановление, если API канала это позволяет).
+5. [ ] **Stop.action → железо (0.7)** — отправьте `Stop` с `QUICK_STOP_REQUEST`; подтвердите, что он
+       доходит до аппаратного quick-stop и сервер сообщает `zero_velocity_confirmed` (через
        `/odometry/filtered`).
-6. [ ] **cmd_vel watchdog (0.5)** — stop publishing `/cmd_vel`; confirm zero + HOLD < 0.5 s
-       (sim ✅; reconfirm on hardware).
-7. [ ] **Collision monitor stop-latency (0.6)** — obstacle in front during a slow drive;
-       confirm slowdown→stop and measure stop-latency **< 200 ms** (ROADMAP Phase 0 EXIT).
+6. [ ] **Сторожевой таймер cmd_vel (0.5)** — прекратите публиковать `/cmd_vel`; подтвердите обнуление + HOLD < 0.5 s
+       (sim ✅; перепроверьте на железе).
+7. [ ] **Задержка останова collision monitor (0.6)** — препятствие впереди во время медленной езды;
+       подтвердите замедление→останов и измерьте задержку останова **< 200 ms** (ROADMAP Phase 0 EXIT).
 
-→ **Phase 0 EXIT closes here.** Do not proceed to autonomy until B1–B7 pass.
+→ **Phase 0 EXIT закрывается здесь.** Не переходите к автономности, пока B1–B7 не пройдены.
 
-## C. Time sync (HIL) — gates ROADMAP 1.2 / Phase 1 EXIT
-- [ ] Deploy `deploy/time_sync/chrony-edge.conf` (edge master) + `chrony-pi.conf` (Pi).
-- [ ] Run `check_offset.sh` on the Pi over real Wi-Fi; **prove offset+RMS ≤ 0.02 s** — i.e.
-      ≪ the 0.2 s (TF) / 0.35 s (depth-match) / 1.5 s (pixel-age) windows.
+## C. Синхронизация времени (HIL) — проверки ROADMAP 1.2 / Phase 1 EXIT
+- [ ] Разверните `deploy/time_sync/chrony-edge.conf` (edge master) + `chrony-pi.conf` (Pi).
+- [ ] Запустите `check_offset.sh` на Pi через реальный Wi-Fi; **докажите, что offset+RMS ≤ 0.02 s** — т.е.
+      ≪ окон 0.2 s (TF) / 0.35 s (depth-match) / 1.5 s (pixel-age).
 
-## D. Transport (HIL) — gates ROADMAP 1.1 / Phase 1 EXIT
-- [ ] Start the single `rmw-zenoh-router.service` on edge (multicast off, 12 MB buffers).
-- [ ] Confirm cross-host pub/sub Pi↔edge over Wi-Fi; measure jitter within budget. Fallback
-      Fast DDS LARGE_DATA + Discovery Server is wired if zenoh misbehaves.
+## D. Транспорт (HIL) — проверки ROADMAP 1.1 / Phase 1 EXIT
+- [ ] Запустите единственный `rmw-zenoh-router.service` на edge (multicast выключен, буферы 12 MB).
+- [ ] Подтвердите межхостовой pub/sub Pi↔edge через Wi-Fi; измерьте джиттер в пределах бюджета. Запасной вариант
+      Fast DDS LARGE_DATA + Discovery Server подключён на случай, если zenoh ведёт себя некорректно.
 
-## E. Perception + Nav on Pi — gates ROADMAP 6.3
-- [ ] `realsense_rgbd_pi.launch.py` up; depth → `depthimage_to_laserscan` → local `/scan`
-      (NO raw depth/PointCloud2 over Wi-Fi). Confirm `/scan` rate ~10–15 Hz.
-- [ ] EKF (`ekf_*` / `imu_filter_madgwick`) fuses wheel odom + RealSense IMU → `/odometry/filtered`.
-- [ ] Lightened Nav2 (NavFn+DWB, 10 Hz) + executive fit the **Pi 5/4 GB CPU budget** — profile
-      `top`/`ros2 ... --use-sim-time false`; this is the real "Pi-class" profiling deferred from 2.7/2.10.
+## E. Восприятие + навигация на Pi — проверки ROADMAP 6.3
+- [ ] `realsense_rgbd_pi.launch.py` поднят; depth → `depthimage_to_laserscan` → локальный `/scan`
+      (БЕЗ сырого depth/PointCloud2 через Wi-Fi). Подтвердите частоту `/scan` ~10–15 Hz.
+- [ ] EKF (`ekf_*` / `imu_filter_madgwick`) сливает одометрию колёс + IMU RealSense → `/odometry/filtered`.
+- [ ] Облегчённый Nav2 (NavFn+DWB, 10 Hz) + executive укладываются в **бюджет CPU Pi 5/4 GB** — профилируйте
+      `top`/`ros2 ... --use-sim-time false`; это реальное профилирование «Pi-класса», отложенное из 2.7/2.10.
 
-## F. SLAM (edge) — gates ROADMAP 6.4
-- [ ] RTAB-Map offline mapping → `.db`; online localization publishes `MapOdomCorrection`
-      to the Pi; `map_odom_relay` applies it (seq/jump/reloc/stale gates already unit-tested).
+## F. SLAM (edge) — проверки ROADMAP 6.4
+- [ ] Офлайн-картирование RTAB-Map → `.db`; онлайн-локализация публикует `MapOdomCorrection`
+      на Pi; `map_odom_relay` применяет её (проверки seq/jump/reloc/stale уже покрыты юнит-тестами).
 
-## G. FLAT mission on hardware — gates ROADMAP 6.5 (first autonomy)
-- [ ] `seek_object` with `allow_vlm:=false`: SEARCH (frontiers) → DETECT (`detect_target_server`
-      on edge → `/target_pixel`) → APPROACH (Nav2). Compare end-to-end timing to the sim
-      baseline (`docs/FLAT_BASELINE.md`) within tolerance.
+## G. Миссия FLAT на железе — проверки ROADMAP 6.5 (первая автономность)
+- [ ] `seek_object` с `allow_vlm:=false`: SEARCH (frontiers) → DETECT (`detect_target_server`
+      на edge → `/target_pixel`) → APPROACH (Nav2). Сравните сквозной тайминг с базовой линией
+      симуляции (`docs/FLAT_BASELINE.md`) в пределах допуска.
 
-## H. VLM mission on hardware — gates ROADMAP 6.5
-- [ ] Same with `allow_vlm:=true` + `planner_orchestrator` (VLM creds in env: `VLM_BASE_URL`/
-      `VLM_API_KEY`/`VLM_MODEL`). Confirm the Set-of-Mark → `DRIVE_TO_VISIBLE(mark_id)` loop drives.
+## H. Миссия VLM на железе — проверки ROADMAP 6.5
+- [ ] То же самое с `allow_vlm:=true` + `planner_orchestrator` (учётные данные VLM в env: `VLM_BASE_URL`/
+      `VLM_API_KEY`/`VLM_MODEL`). Подтвердите, что цикл Set-of-Mark → `DRIVE_TO_VISIBLE(mark_id)` управляет роботом.
 
-## I. Field degradation — gates ROADMAP 6.6 (+ live 5.1/5.4 on metal)
-- [ ] Physically cut Wi-Fi / kill the edge **mid-VLM-mission**; confirm **seamless VLM→FLAT**
-      (5.1) — mission continues as FLAT, result `DEGRADED_SUCCESS`, **no false `reached`** on a
-      stale pixel (5.4). This is the hardware repeat of the sim-validated degradation.
+## I. Полевая деградация — проверки ROADMAP 6.6 (+ живые 5.1/5.4 на железе)
+- [ ] Физически оборвите Wi-Fi / завершите edge **в середине VLM-миссии**; подтвердите **бесшовную деградацию VLM→FLAT**
+      (5.1) — миссия продолжается как FLAT, результат `DEGRADED_SUCCESS`, **без ложного `reached`** на
+      устаревшем пикселе (5.4). Это аппаратное повторение деградации, проверенной в симуляции.
 
 ## EXIT (Phase 6)
-Robot runs both FLAT and VLM missions on real hardware; every safety/degradation scenario
-reproduces in the field; baseline metrics match sim within tolerance.
+Робот выполняет и FLAT-, и VLM-миссии на реальном железе; каждый сценарий безопасности/деградации
+воспроизводится в поле; базовые метрики совпадают с симуляцией в пределах допуска.
 
 ---
-### Sim status feeding this checklist (already green on `robust`)
-Phase 0 (sim parts: `use_sim_time`, cmd_vel watchdog, collision monitor) ✅ · Phase 1
-(`/scan` local, zenoh single-host, QoS+Heartbeat) ✅ · Phase 2 FLAT executive ✅ · Phase 3
-perception + Set-of-Mark (live YOLOE) ✅ · Phase 4 VLM planner (live qwen3-vl, async replan) ✅ ·
-Phase 5 FMEA (seamless VLM→FLAT live; 5.4/5.6/5.7 tests) ✅. Open sim item: cross-host jitter
-(needs 2 hosts) — closes in C/D above.
+### Статус симуляции, питающий этот чек-лист (уже зелёный на `robust`)
+Phase 0 (части в sim: `use_sim_time`, сторожевой таймер cmd_vel, collision monitor) ✅ · Phase 1
+(`/scan` локальный, zenoh на одном хосте, QoS+Heartbeat) ✅ · Phase 2 FLAT executive ✅ · Phase 3
+восприятие + Set-of-Mark (живой YOLOE) ✅ · Phase 4 VLM planner (живой qwen3-vl, асинхронный replan) ✅ ·
+Phase 5 FMEA (бесшовная VLM→FLAT вживую; тесты 5.4/5.6/5.7) ✅. Открытый пункт в sim: межхостовой джиттер
+(нужны 2 хоста) — закрывается в C/D выше.

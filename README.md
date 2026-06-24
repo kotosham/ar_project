@@ -1,42 +1,42 @@
 # AR Project
 
-This repository contains a simulation setup for a custom robot in Gazebo using SLAM Toolbox, Nav2, and RViz2. The robot can be launched into different worlds, build maps using SLAM, and navigate using Nav2.
+Этот репозиторий содержит окружение для симуляции пользовательского робота в Gazebo с использованием SLAM Toolbox, Nav2 и RViz2. Робота можно запускать в разных мирах, строить карты с помощью SLAM и выполнять навигацию с помощью Nav2.
 
-The project is based on [this](https://www.youtube.com/playlist?list=PLunhqkrRNRhYAffV8JDiFOatQXuU-NnxT) playlist on YouTube
+Проект основан на [этом](https://www.youtube.com/playlist?list=PLunhqkrRNRhYAffV8JDiFOatQXuU-NnxT) плейлисте на YouTube
 
 ## Robot Description
 
-The robot is a differential drive mobile platform with two rear wheels and one omnidirectional front wheel for passive balancing. It is equipped with the following sensors:
+Робот представляет собой мобильную платформу с дифференциальным приводом, оснащённую двумя задними колёсами и одним всенаправленным передним колесом для пассивной балансировки. Он оборудован следующими датчиками:
 
-- A 2D LiDAR for mapping and obstacle detection
-- An RGB camera for visual information
-- A depth camera for 3D perception and distance estimation
+- 2D-лидар для построения карт и обнаружения препятствий
+- RGB-камера для получения визуальной информации
+- Камера глубины для 3D-восприятия и оценки расстояний
 
 ## Project Structure
 
-- `config/` — Configuration files for SLAM, controllers, RViz, and navigation.
-- `description/` — URDF/XACRO files describing the robot model.
-- `launch/` — Launch scripts for simulation, SLAM, navigation, and visualization.
-- `maps/` — Pre-built maps corresponding to each world.
-- `worlds/` — Gazebo world files for testing simulation.
+- `config/` — Конфигурационные файлы для SLAM, контроллеров, RViz и навигации.
+- `description/` — Файлы URDF/XACRO, описывающие модель робота.
+- `launch/` — Скрипты запуска для симуляции, SLAM, навигации и визуализации.
+- `maps/` — Заранее построенные карты, соответствующие каждому миру.
+- `worlds/` — Файлы миров Gazebo для тестирования симуляции.
 
 ## How to Run the Simulation
 
 ### 1. Launch Gazebo Simulation with a Specific World
-Replace `<n>` with the world number (1, 2, or 3):
+Замените `<n>` на номер мира (1, 2 или 3):
 ```bash
 ros2 launch ar_project launch_sim.launch.py world:=./src/ar_project/worlds/test_<n>.world
 ```
 
 ### 2. Launch SLAM Toolbox
 
-Before launching, update the map_file_name field in config/mapper_params_online_async.yaml:
+Перед запуском обновите поле map_file_name в config/mapper_params_online_async.yaml:
 
 ```yaml
 map_file_name: "home/<user>/<path_to_ROS_workspace>/src/ar_project/maps/test_map_<n>/test_world_<n>_map_serial"
 ```
 
-Then run:
+Затем выполните:
 
 ```bash
 ros2 launch slam_toolbox online_async_launch.py \
@@ -67,7 +67,7 @@ rviz2
 
 ## Dependencies
 
-Make sure the following ROS 2 packages are installed:
+Убедитесь, что установлены следующие пакеты ROS 2:
 
 - `ros-<distro>-gazebo-ros-pkgs`
 - `ros-<distro>-slam-toolbox`
@@ -79,9 +79,9 @@ Make sure the following ROS 2 packages are installed:
 - `ros-<distro>-ros2-control`
 - `ros-<distro>-ros2-controllers`
 
-Replace `<distro>` with your ROS 2 distribution name (e.g., `humble`, `foxy`, `galactic`).
+Замените `<distro>` на название вашего дистрибутива ROS 2 (например, `humble`, `foxy`, `galactic`).
 
-To install all dependencies, run:
+Чтобы установить все зависимости, выполните:
 
 ```bash
 sudo apt install ros-<distro>-gazebo-ros-pkgs ros-<distro>-slam-toolbox ros-<distro>-nav2-bringup \

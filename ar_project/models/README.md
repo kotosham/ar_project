@@ -1,5 +1,5 @@
-This directory stores Gazebo models vendored by `ar_project`.
+В этом каталоге хранятся модели Gazebo, поставляемые в составе `ar_project`.
 
-The migration to Gazebo Sim keeps the world files pointing at `model://...`
-resources, so the required model folders live here and are installed into
-`share/ar_project/models`.
+При переходе на Gazebo Sim файлы мира по-прежнему ссылаются на ресурсы
+`model://...`, поэтому необходимые папки моделей размещаются здесь и
+устанавливаются в `share/ar_project/models`.

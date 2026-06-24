@@ -1,77 +1,77 @@
-# Cross-link QoS & Heartbeat policy — ROADMAP Phase 1.3
+# Политика QoS и heartbeat для cross-link — ROADMAP Phase 1.3
 
-Every Pi↔edge ROS endpoint takes its QoS from a named profile in
-[`fleet_comms/qos.py`](../fleet_comms/fleet_comms/qos.py) — never hand-rolled.
-This is the single source of truth; `fleet_comms` is depended on by
-`search_coordinator` (Pi) and `planner_orchestrator` (edge).
+Каждая ROS-точка обмена Pi↔edge берёт свой QoS из именованного профиля в
+[`fleet_comms/qos.py`](../fleet_comms/fleet_comms/qos.py) — никогда не задаётся вручную.
+Это единственный источник истины; от `fleet_comms` зависят
+`search_coordinator` (Pi) и `planner_orchestrator` (edge).
 
-## Profiles
+## Профили
 
-| Profile | Reliability | Durability | Depth | Deadline | Liveliness (lease) | Use for |
+| Профиль | Reliability | Durability | Depth | Deadline | Liveliness (lease) | Назначение |
 |---|---|---|---|---|---|---|
 | `control_cmd` | RELIABLE | VOLATILE | 1 | 2.0 s | MANUAL_BY_TOPIC (3 s) | SeekObject goal, DetectTarget goal, PlanStep |
-| `control_cmd_latched` | RELIABLE | TRANSIENT_LOCAL | 1 | — | AUTOMATIC | SeekObject result/status (operator reconnect) |
-| `liveliness_status(p)` | RELIABLE | VOLATILE | 1 | 1.5·p | MANUAL_BY_TOPIC (3·p) | Heartbeat + periodic health |
+| `control_cmd_latched` | RELIABLE | TRANSIENT_LOCAL | 1 | — | AUTOMATIC | SeekObject result/status (переподключение оператора) |
+| `liveliness_status(p)` | RELIABLE | VOLATILE | 1 | 1.5·p | MANUAL_BY_TOPIC (3·p) | Heartbeat + периодический health |
 | `correction_lowrate` | RELIABLE | VOLATILE | 1 | 1.0 s | AUTOMATIC (3 s) | MapOdomCorrection (~1–2 Hz) |
-| `detection_stream` | BEST_EFFORT | VOLATILE | 1 | 1.5 s | — | OFFER side of a *periodic* detection stream (publisher) |
-| `detection_stream_nodeadline` | BEST_EFFORT | VOLATILE | 1 | — | — | /target_pixel **consumer** (sporadic stream; freshness via app age-gate) |
-| `media_besteffort` | BEST_EFFORT | VOLATILE | 1 | — | — | **compressed** frames/bursts only |
+| `detection_stream` | BEST_EFFORT | VOLATILE | 1 | 1.5 s | — | OFFER-сторона *периодического* потока детекций (publisher) |
+| `detection_stream_nodeadline` | BEST_EFFORT | VOLATILE | 1 | — | — | /target_pixel **consumer** (спорадический поток; свежесть обеспечивается age-gate на уровне приложения) |
+| `media_besteffort` | BEST_EFFORT | VOLATILE | 1 | — | — | только **сжатые** кадры/всплески |
 
-Why deadline+liveliness: a silent producer must be observable within seconds.
-`liveliness_status` producer and monitor MUST use the **same period** so the
-offered/requested QoS stay compatible — [`is_compatible()`](../fleet_comms/fleet_comms/qos.py)
-encodes the DDS Request-vs-Offered rules and the unit test locks them in.
+Зачем deadline+liveliness: молчащий производитель должен становиться наблюдаемым в течение секунд.
+Производитель и монитор `liveliness_status` ОБЯЗАНЫ использовать **один и тот же период**, чтобы
+предлагаемый/запрашиваемый QoS оставались совместимыми — [`is_compatible()`](../fleet_comms/fleet_comms/qos.py)
+кодирует правила DDS Request-vs-Offered, а модульный тест фиксирует их.
 
-## Cross-link endpoint → profile
+## Точка обмена cross-link → профиль
 
-| Endpoint | Kind | Producer | Profile | Status |
+| Точка обмена | Тип | Производитель | Профиль | Статус |
 |---|---|---|---|---|
-| `/seek_object` | action | Pi exec | `control_cmd` goal / `control_cmd_latched` result+status | planned (2.x) |
-| `/detect_target` | action | edge | `control_cmd` goal / result `media_besteffort` for annotated frame | planned (3.2) |
-| `/map_odom_correction` | topic | edge SLAM | `correction_lowrate` | planned (2.6) |
-| `/heartbeat` | topic | every producer | `liveliness_status(0.5)` | **now** |
-| `PlanStep` | topic | edge planner | `control_cmd` (no fixed deadline) | planned (4.x) |
-| `Candidate[]` | sub-msg | edge | inherits carrying action result | planned (3.x) |
-| `/target_pixel` | topic | edge tracker | publisher: no-deadline BEST_EFFORT (sporadic); **consumer: `detection_stream_nodeadline`** — requesting `detection_stream`'s 1.5 s deadline drops every sample (must-fix #2, locked by `is_compatible` test) | exists |
-| `/target_prompt` | topic | Pi exec (`PromptBridge`) | `control_cmd_latched` — replaces `reliable_prompt_sender`; tracker sub should become TRANSIENT_LOCAL in 2.9 for late-join replay | planned (2.x) |
-| GetObservation `result.view` | action payload | Pi | CompressedImage only; `media_besteffort` if relayed | planned (3.5) |
+| `/seek_object` | action | Pi exec | `control_cmd` goal / `control_cmd_latched` result+status | планируется (2.x) |
+| `/detect_target` | action | edge | `control_cmd` goal / result `media_besteffort` для аннотированного кадра | планируется (3.2) |
+| `/map_odom_correction` | topic | edge SLAM | `correction_lowrate` | планируется (2.6) |
+| `/heartbeat` | topic | каждый производитель | `liveliness_status(0.5)` | **сейчас** |
+| `PlanStep` | topic | edge planner | `control_cmd` (без фиксированного deadline) | планируется (4.x) |
+| `Candidate[]` | sub-msg | edge | наследует от несущего action result | планируется (3.x) |
+| `/target_pixel` | topic | edge tracker | publisher: BEST_EFFORT без deadline (спорадический); **consumer: `detection_stream_nodeadline`** — запрос deadline 1.5 s из `detection_stream` отбрасывает каждый сэмпл (must-fix #2, зафиксировано тестом `is_compatible`) | существует |
+| `/target_prompt` | topic | Pi exec (`PromptBridge`) | `control_cmd_latched` — заменяет `reliable_prompt_sender`; подписка tracker должна стать TRANSIENT_LOCAL в 2.9 для повтора при позднем подключении | планируется (2.x) |
+| GetObservation `result.view` | action payload | Pi | только CompressedImage; `media_besteffort` при ретрансляции | планируется (3.5) |
 
-## No raw depth / PointCloud2 over Wi-Fi (ROADMAP 1.4 / 3.5)
+## Никакой raw depth / PointCloud2 по Wi-Fi (ROADMAP 1.4 / 3.5)
 
-`media_besteffort` is for **compressed** media only. Raw depth and PointCloud2
-must never cross the link.
+`media_besteffort` предназначен только для **сжатых** медиа. Raw depth и PointCloud2
+никогда не должны пересекать линк.
 
-- **LEAK (open, architectural — Phase 3.x):** `/tracker/aligned_depth_to_color/image_raw`
-  — RAW uncompressed aligned depth published by
-  [`tracker_rgbd_bridge.py:56`](../ar_project/scripts/tracker_rgbd_bridge.py) at
-  default RELIABLE depth=10. The one true raw-depth-over-Wi-Fi violation. Fix is
-  to compress (`compressedDepth`) or keep depth edge-local and ship only the
-  derived point/Candidate — part of the tracker→DetectTarget rework (Phase 3.2/3.5),
-  not a QoS tweak.
-- Compressed media that legitimately crosses but currently uses default RELIABLE
-  depth=10 (→ `media_besteffort` *if the node survives*):
-  `/tracker/color/image/compressed`, `/tracker/color/image_raw` (CompressedImage
-  despite the name). Heavy mono8 mask `/target_mask` → replaced by
-  Candidate[]+CompressedImage in Phase 3.2.
-- No PointCloud2 publishers exist in source (Phase 1.4 moved the costmap to the
-  local `/scan`).
+- **LEAK (открыт, архитектурный — Phase 3.x):** `/tracker/aligned_depth_to_color/image_raw`
+  — RAW несжатый aligned depth, публикуемый
+  [`tracker_rgbd_bridge.py:56`](../ar_project/scripts/tracker_rgbd_bridge.py) с
+  параметрами по умолчанию RELIABLE depth=10. Единственное настоящее нарушение «raw depth по Wi-Fi». Исправление —
+  сжимать (`compressedDepth`) либо держать depth локально на edge и передавать только
+  производную точку/Candidate — это часть переработки tracker→DetectTarget (Phase 3.2/3.5),
+  а не настройка QoS.
+- Сжатые медиа, которые легитимно пересекают линк, но сейчас используют параметры по умолчанию RELIABLE
+  depth=10 (→ `media_besteffort` *если узел это переживёт*):
+  `/tracker/color/image/compressed`, `/tracker/color/image_raw` (несмотря на имя — это CompressedImage).
+  Тяжёлая mono8-маска `/target_mask` → заменяется на
+  Candidate[]+CompressedImage в Phase 3.2.
+- В исходниках нет ни одного publisher PointCloud2 (в Phase 1.4 costmap перенесли на
+  локальный `/scan`).
 
-## Do NOT re-profile these (deleted in Phase 2.9)
+## НЕ переназначайте профили этим (удалено в Phase 2.9)
 
-`reliable_prompt_sender.py` and the latch-soup handshake (`/target_prompt`,
-`/target_prompt_ack`, `/target_goal_locked`), and the edge tracker's reactive
-`/cmd_vel` path. Their QoS work would be thrown away — `SeekObject`
-(`control_cmd_latched`) is the principled replacement.
+`reliable_prompt_sender.py` и handshake из латч-мешанины (`/target_prompt`,
+`/target_prompt_ack`, `/target_goal_locked`), а также реактивный путь `/cmd_vel`
+edge-трекера. Работа над их QoS была бы выброшена впустую — `SeekObject`
+(`control_cmd_latched`) является принципиальной заменой.
 
 ## Heartbeat (`fleet_comms/heartbeat.py`)
 
-- **Producers** (`HeartbeatPublisher`) — edge SLAM (`slam`), detector (`detector`),
-  `planner_orchestrator`; the Pi `search_coordinator` emits one for symmetry. One
-  `/heartbeat` topic, distinguished by `node_name`, **0.5 s** period fleet-wide.
-  Fills `header.stamp` (chrony-synced, Phase 1.2), `status`, `cpu_load`,
-  `last_latency_ms` (feeds the p99 circuit-breaker, Phase 4.4), `mission_epoch`
-  (stale-epoch beats ignored, Phase 2.5).
-- **Monitor** (`HeartbeatMonitor`, in `search_coordinator`) — tracks per-`node_name`
-  health from the reported status, the QoS deadline-missed / liveliness-lost
-  events, and a stale-timeout fallback. Phase 1.3 only logs / exposes
-  `health_snapshot()`; the VLM→FLAT degradation FSM wiring is Phase 5.1.
+- **Производители** (`HeartbeatPublisher`) — edge SLAM (`slam`), детектор (`detector`),
+  `planner_orchestrator`; Pi `search_coordinator` тоже эмитит heartbeat для симметрии. Один
+  топик `/heartbeat`, различаемый по `node_name`, период **0.5 s** на весь флот.
+  Заполняет `header.stamp` (синхронизация через chrony, Phase 1.2), `status`, `cpu_load`,
+  `last_latency_ms` (питает circuit-breaker по p99, Phase 4.4), `mission_epoch`
+  (биения с устаревшей epoch игнорируются, Phase 2.5).
+- **Монитор** (`HeartbeatMonitor`, в `search_coordinator`) — отслеживает здоровье по каждому `node_name`
+  из переданного status, события QoS deadline-missed / liveliness-lost
+  и фолбэк по stale-timeout. В Phase 1.3 он только логирует / отдаёт
+  `health_snapshot()`; обвязка FSM деградации VLM→FLAT относится к Phase 5.1.
