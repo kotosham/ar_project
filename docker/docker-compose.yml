@@ -1,0 +1,67 @@
+# Автоматическое поднятие стека на ПК. Профили выбирают, что именно поднять:
+#   docker compose --profile sim  up   # весь FLAT в симуляции (один контейнер, CPU)
+#   docker compose --profile edge up   # детектор (GPU) + VLM-оркестратор
+#   docker compose --profile all  up   # всё сразу (тяжело по RAM, см. README)
+# Контекст сборки — родитель ar_project (чтобы видеть оба репозитория).
+name: mrn
+
+x-ros-env: &ros-env
+  ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:-42}
+  RMW_IMPLEMENTATION: ${RMW_IMPLEMENTATION:-rmw_fastrtps_cpp}
+
+services:
+  # Весь FLAT-стек в симуляции (Gazebo + RTAB-Map + Nav2 + executive) одним контейнером.
+  # flat_sim_bringup уже запускает gui:=false (headless) — дисплей не нужен.
+  sim:
+    build:
+      context: ../..
+      dockerfile: ar_project/docker/Dockerfile
+      target: sim
+    image: mrn/sim:${ROS_DISTRO:-jazzy}
+    environment: *ros-env
+    command: ["ros2", "launch", "ar_project", "flat_sim_bringup.launch.py"]
+    shm_size: "1gb"
+    stop_grace_period: 15s
+    profiles: ["sim", "all"]
+
+  # Детектор YOLOE (edge, GPU). Веса монтируются томом в share-путь пакета.
+  detector:
+    build:
+      context: ../..
+      dockerfile: ar_project/docker/Dockerfile
+      target: edge
+    image: mrn/edge:${ROS_DISTRO:-jazzy}
+    environment: *ros-env
+    command:
+      - "/opt/ot_venv/bin/python"
+      - "/ws/install/object_tracking/lib/object_tracking/detect_target_server"
+      - "--ros-args"
+      - "-p"
+      - "use_sim_time:=true"
+    volumes:
+      - ../../object_tracking/object_tracking/object_tracking/model_weights:/ws/install/object_tracking/share/object_tracking/model_weights:ro
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    profiles: ["edge", "all"]
+
+  # VLM-оркестратор (edge). Креды VLM берутся из vlm.env (его содержимое не читается
+  # инструментами — только подключается как env_file). required:false — без него
+  # оркестратор стартует в mock-режиме.
+  orchestrator:
+    image: mrn/edge:${ROS_DISTRO:-jazzy}
+    build:
+      context: ../..
+      dockerfile: ar_project/docker/Dockerfile
+      target: edge
+    environment: *ros-env
+    env_file:
+      - path: ../../object_tracking/planner_orchestrator/vlm.env
+        required: false
+    command: ["ros2", "run", "planner_orchestrator", "orchestrator_node"]
+    depends_on: [detector]
+    profiles: ["edge", "all"]
