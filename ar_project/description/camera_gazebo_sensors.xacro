@@ -8,15 +8,19 @@
         <sensor name="camera" type="camera">
             <pose>0 0 0 0 0 0</pose>
             <always_on>true</always_on>
-            <visualize>true</visualize>
-            <update_rate>30</update_rate>
+            <!-- WSL2: gz OGRE2 sensor rendering is slow. RTAB-Map only runs at ~2 Hz,
+                 so 640x480@30 just overwhelms the pipeline (multi-second lag breaks the
+                 odom<->image sync -> crooked map). 320x240@15 (same 4:3 FOV) is plenty
+                 and keeps RTAB-Map synced. visualize off to save GUI render cost. -->
+            <visualize>false</visualize>
+            <update_rate>15</update_rate>
             <camera>
                 <camera_info_topic>camera/camera/color/camera_info</camera_info_topic>
                 <horizontal_fov>1.089</horizontal_fov>
                 <image>
                     <format>R8G8B8</format>
-                    <width>640</width>
-                    <height>480</height>
+                    <width>320</width>
+                    <height>240</height>
                 </image>
                 <clip>
                     <near>0.05</near>
@@ -33,16 +37,18 @@
         <sensor name="depth_camera" type="depth">
             <pose>0 0 0 0 0 0</pose>
             <always_on>true</always_on>
-            <visualize>true</visualize>
-            <update_rate>30</update_rate>
+            <!-- Must match the RGB sensor resolution+FOV so the aligned-depth emulation
+                 (gz_bridge) keeps RGB and depth pixels coincident. -->
+            <visualize>false</visualize>
+            <update_rate>15</update_rate>
             <topic>camera/camera/depth/image_rect_raw</topic>
             <gz_frame_id>camera_link_optical</gz_frame_id>
             <camera>
                 <camera_info_topic>camera/camera/depth/camera_info</camera_info_topic>
                 <horizontal_fov>1.089</horizontal_fov>
                 <image>
-                    <width>640</width>
-                    <height>480</height>
+                    <width>320</width>
+                    <height>240</height>
                 </image>
                 <depth_camera>
                     <clip>

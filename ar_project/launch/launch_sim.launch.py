@@ -75,6 +75,18 @@ def _build_gz_env():
         'ROS_DISTRO',
         'ROS_VERSION',
         'GZ_CONFIG_PATH',
+        # GUI/GL tuning passed through for WSLg (set these in the shell to fix a
+        # black screen / OGRE2 crash: QT_QPA_PLATFORM=xcb, LIBGL_ALWAYS_SOFTWARE=1).
+        'QT_QPA_PLATFORM',
+        'LIBGL_ALWAYS_SOFTWARE',
+        'LIBGL_ALWAYS_INDIRECT',
+        'MESA_GL_VERSION_OVERRIDE',
+        'MESA_LOADER_DRIVER_OVERRIDE',
+        '__NV_PRIME_RENDER_OFFLOAD',
+        '__GLX_VENDOR_LIBRARY_NAME',
+        'OGRE_RTT_MODE',
+        'XDG_SESSION_TYPE',
+        'PULSE_SERVER',
     ]
     env = {key: os.environ[key] for key in whitelist if os.environ.get(key)}
     env['GZ_SIM_SYSTEM_PLUGIN_PATH'] = os.pathsep.join(

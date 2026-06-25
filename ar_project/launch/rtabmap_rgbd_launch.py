@@ -330,7 +330,9 @@ def generate_launch_description():
                 ' --Optimizer/GravitySigma 0',
             ],
             'odom_sensor_sync': 'true',
-            'wait_for_transform': '0.5',
+            # Was 0.5; give more slack so a slightly late odom TF (sim startup /
+            # WSL2 render jitter) doesn't desync the RGB-D frame and skew the map.
+            'wait_for_transform': '1.0',
             'qos': '2',
         }.items(),
     )
