@@ -7,3 +7,7 @@ deploy/build/deploy.env
 /build/
 /install/
 /log/
+
+# Python bytecode (never commit compiled caches)
+__pycache__/
+*.py[cod]
