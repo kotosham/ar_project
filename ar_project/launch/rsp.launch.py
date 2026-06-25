@@ -6,6 +6,7 @@ from launch import LaunchDescription
 from launch.substitutions import LaunchConfiguration, Command
 from launch.actions import DeclareLaunchArgument
 from launch_ros.actions import Node
+from launch_ros.parameter_descriptions import ParameterValue
 
 import xacro
 
@@ -20,7 +21,11 @@ def generate_launch_description():
     pkg_path = os.path.join(get_package_share_directory('ar_project'))
     xacro_file = os.path.join(pkg_path,'description','robot.urdf.xacro')
     #robot_description_config = xacro.process_file(xacro_file).toxml()
-    robot_description_config = Command(['xacro ', xacro_file, ' use_ros2_control:=', use_ros2_control])
+    # value_type=str so the URDF is always treated as a string (otherwise launch
+    # tries to parse it as YAML and chokes on any ': ' in the XML, e.g. in comments).
+    robot_description_config = ParameterValue(
+        Command(['xacro ', xacro_file, ' use_ros2_control:=', use_ros2_control]),
+        value_type=str)
 
     # Create a robot_state_publisher node
     params = {'robot_description': robot_description_config, 'use_sim_time': use_sim_time}

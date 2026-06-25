@@ -37,6 +37,11 @@ class SeekObjectServer:
         self.prompt = prompt_bridge
         self.sync_epoch = sync_epoch_cb
         self._pixel_fresh_s = pixel_fresh_s
+        # When ExploreFrontier reports NO_FRONTIER, wait this long for a fresh
+        # detection before declaring failure: the target can be visible at spawn
+        # (the tracker streams /target_pixel) with no unexplored frontier left to
+        # drive to -- that must become DETECT, not a spurious 'frontiers exhausted'.
+        self._no_frontier_detect_wait_s = pixel_fresh_s + 1.5
 
         self._last_pixel = None
         self._last_pixel_recv_ns = 0
@@ -73,6 +78,20 @@ class SeekObjectServer:
             return None
         age = (self.node.get_clock().now().nanoseconds - self._last_pixel_recv_ns) / 1e9
         return EVENT.DETECTED if age <= self._pixel_fresh_s else None
+
+    def _await_detection(self, my_epoch, parent, timeout_s):
+        """Poll for a fresh /target_pixel for up to timeout_s. Returns EVENT.DETECTED
+        or None. Honors parent cancel + epoch supersession. Used to catch a target
+        that is already in view when there is no frontier left to explore."""
+        deadline = self.node.get_clock().now().nanoseconds + int(timeout_s * 1e9)
+        while self.node.get_clock().now().nanoseconds < deadline:
+            if self._should_abort(parent, my_epoch):
+                return None
+            ev = self._fresh_pixel_event()
+            if ev is not None:
+                return ev
+            time.sleep(0.1)
+        return None
 
     # -- helpers --------------------------------------------------------------
 
@@ -137,6 +156,12 @@ class SeekObjectServer:
             return 'FAIL'
         # kind == 'result'
         if payload.outcome == ExploreFrontier.Result.NO_FRONTIER:
+            # No frontier to drive to (e.g. cold-start before the map has grown, or
+            # exploration genuinely exhausted). The target may already be visible --
+            # give detection a brief window before failing the mission.
+            ev = self._await_detection(my_epoch, parent, self._no_frontier_detect_wait_s)
+            if ev == EVENT.DETECTED:
+                return ev
             return EVENT.NO_FRONTIER
         if payload.outcome == ExploreFrontier.Result.SUCCEEDED:
             # reached a frontier without a detection -> keep exploring
@@ -198,7 +223,12 @@ class SeekObjectServer:
                 parent.abort()
                 return result
 
-            self._publish_feedback(parent, my_epoch, state)
+            # Report WHICH skill the FSM is driving (ExploreFrontier in SEARCH,
+            # ApproachDetection in APPROACH) so a mission monitor can tell "idle in
+            # SEARCH" from "actively driving" -- active_subtask was always '' before,
+            # making a live run impossible to diagnose.
+            self._publish_feedback(parent, my_epoch, state,
+                                   fsm.select_subgoal(state) or '')
 
             if state == STATE.SEARCH:
                 self._search_start_ns = self.node.get_clock().now().nanoseconds

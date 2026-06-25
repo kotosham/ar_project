@@ -73,45 +73,101 @@ DETECT/APPROACH executive потребляет `/target_pixel`. (Без дете
 ```bash
 # detector running (3b) + executive up. In the orchestrator shell:
 set -a; source object_tracking/planner_orchestrator/vlm.env; set +a   # loads VLM_* (never printed)
-ros2 run planner_orchestrator orchestrator_node --ros-args \
-  -p use_sim_time:=true -p use_mock:=false -p replan_every_n:=3 -p max_steps:=40
+~/ot_venv/bin/python $(ros2 pkg prefix planner_orchestrator)/lib/planner_orchestrator/orchestrator_node \
+  --ros-args -p use_sim_time:=true -p use_mock:=false -p replan_every_n:=3 -p max_steps:=40 \
+  -p async_replan:=false -p detect_conf:=0.5
 # expect: "planner_orchestrator up ... client=OpenAICompatibleClient creds=env"
-ros2 topic pub --once /vlm_mission std_msgs/msg/String "{data: bus}"   # start the VLM mission
+ros2 topic pub --once /vlm_mission std_msgs/msg/String "{data: bus}"   # ЧИСТЫЙ лейбл (см. ниже)
 ```
-Orchestrator забирает реальные Set-of-Mark-кандидаты из `detect_target_server`, VLM выбирает
-`DRIVE_TO_VISIBLE(mark_id)` / `GO_TO_FRONTIER` и диспетчеризует их в skill-ы executive. Перепланирование
-перекрывает выполнение (4.6). Для офлайн-прогона используйте `-p use_mock:=true` (ключ API не нужен).
+Orchestrator забирает реальные Set-of-Mark-кандидаты из `detect_target_server`, шлёт VLM наблюдение
+(см. ниже) и диспетчеризует выбранное действие в skill-ы executive. Для офлайн-прогона используйте
+`-p use_mock:=true` (ключ API не нужен — это же FLAT-фоллбэк при деградации).
+
+> Запускать орхестратор через `~/ot_venv/bin/python <...>/orchestrator_node` (а не `ros2 run`): ему
+> нужны cv2/numpy для рендера карты и кодирования кадра; venv это гарантирует. Без cv2 карта молча
+> отключается (`send_map` авто-off).
+
+#### Словарь действий VLM (что модель может выбрать)
+`TURN`(угол) · `DRIVE_FORWARD`(±метры, − = назад) · `DRIVE_TO_VISIBLE`(mark_id → ApproachDetection через
+Nav) · `DETECT_ALL`(детект всех объектов + классы, в notes) · `DONE`. Высокоуровневого `GO_TO_FRONTIER`
+больше нет — модель навигирует сырым движением (честное сравнение с FLAT). Stop — только safety-фоллбэк
+исполнителя, не действие VLM.
+
+#### Что уходит в VLM каждый ход
+Текст (`target`, `visible_marks`=[mark_id, label, score, **distance_m** с RealSense], notes) + **1-е
+изображение** (камера с номерами марок) + **2-е изображение** (top-down SLAM-карта `/map` с позой
+робота) + описание карты. Карта рендерится из `/map` (RTAB-Map), edge-локально.
+
+#### Ключевые параметры orchestrator
+| Параметр | Деф. | Зачем |
+|---|---|---|
+| `async_replan` | `true` | `false` = дискретные шаги (едь→стоп→свежее наблюдение→думай). Для наблюдения/сравнения ставь `false` |
+| `detect_conf` | `0.0` | Порог уверенности (0.0 = деф. детектора 0.25). `0.5` + чистый лейбл — игнор слабых/краевых детекций |
+| `send_map` | `true` | `false` = не слать карту 2-м изображением (легче запрос; если эндпоинт таймаутит) |
+| `map_max_px` | `384` | Макс. сторона рендера карты |
+| `vlm_timeout_s` | `8.0` | На медленном эндпоинте/с картой подними до `30–60`, иначе circuit-breaker → DEGRADED |
+| `replan_every_n` | `3` | Реальная VLM всё равно отдаёт 1 действие за вызов |
+
+> **Цель — ЧИСТЫЙ лейбл объекта** (`bus`, НЕ `find a bus`/`ride to bus`): нормализации запроса нет,
+> YOLOE матчит строку как один класс. `bus` → conf ~0.66; `ride to bus` → ~0.45 (слабее, ложные
+> «доехал» у края кадра). При NL-запросе поднимай `detect_conf`.
 
 > Замечание по RAM: gz + RTAB-Map + Nav2 + YOLOE вместе требуют >4 ГБ. На хосте с ≤4 ГБ запускайте
 > либо детектор отдельно (мир из 3b), ЛИБО nav-стек, но не всё сразу.
+
+> Замечание по симуляции (только gz): перед запуском sim-стека ставь `export GZ_IP=127.0.0.1` — иначе
+> `gz sim` периодически падает с SIGSEGV в потоке gz-transport discovery (известный баг на WSL). На
+> железе Gazebo нет — там GZ_IP не нужен. Лончеры `watch_vlm.sh`/`watch_flat.sh` уже это делают.
 
 ---
 
 ## 4. ЖЕЛЕЗО (СНАЧАЛА следуйте §B safety в HIL_BRINGUP_CHECKLIST.md — колёса над землёй)
 
-### 4a. Edge-машина
+### 4a. Edge-машина (GPU)
 ```bash
 sudo systemctl start rmw-zenoh-router.service          # deploy/transport (transport)
 sudo systemctl start chrony   # chrony-edge.conf master                (deploy/time_sync)
-ros2 launch ar_project rtabmap_rgbd_launch.py use_sim_time:=false       # SLAM -> MapOdomCorrection
+ros2 launch ar_project rtabmap_rgbd_launch.py use_sim_time:=false       # SLAM -> /map + MapOdomCorrection
 ~/ot_venv/bin/python $(ros2 pkg prefix object_tracking)/lib/object_tracking/detect_target_server \
-  --ros-args -p use_sim_time:=false -p use_compressed_input:=true       # detector
-set -a; source vlm.env; set +a
-ros2 run planner_orchestrator orchestrator_node --ros-args -p use_sim_time:=false  # VLM (optional)
+  --ros-args -p use_sim_time:=false -p use_compressed_input:=true       # detector (YOLOE, venv)
+# VLM-оркестратор (только для VLM-режима): creds из env, НИКОГДА не в параметрах/логах
+set -a; source object_tracking/planner_orchestrator/vlm.env; set +a
+~/ot_venv/bin/python $(ros2 pkg prefix planner_orchestrator)/lib/planner_orchestrator/orchestrator_node \
+  --ros-args -p use_sim_time:=false -p async_replan:=false -p detect_conf:=0.5 \
+  -p vlm_timeout_s:=30.0          # карта /map берётся edge-локально (RTAB-Map) -> в VLM 2-м изображением
 ```
+Параметры VLM — см. таблицу в §3c. `detect_target_server` и `orchestrator_node` оба в `~/ot_venv`
+(torch для детектора; cv2/numpy для рендера карты у оркестратора).
 
 ### 4b. Pi (робот)
+Все ноды на Pi — с `use_sim_time:=false` (на железе НЕТ `/clock`; см. чек-лист A).
 ```bash
 source /opt/ros/jazzy/setup.bash && source ~/ros2_ws/install/setup.bash
 ros2 launch ar_project hardware_bringup.launch.py        # ros2_control + CAN/EPOS4 + twist_mux
-                                                         #   + collision_monitor + cmd_vel watchdog
-ros2 launch ar_project realsense_rgbd_pi.launch.py       # RealSense + local /scan + EKF
+                                                         #   + collision_monitor + cmd_vel watchdog + /scan
+ros2 launch ar_project realsense_rgbd_pi.launch.py       # RealSense (RGB+depth+IMU) + EKF
 ros2 launch ar_project navigation_launch.py use_sim_time:=false odom_topic:=/odometry/filtered
-ros2 run search_coordinator map_odom_relay --ros-args -p use_sim_time:=false
-ros2 run search_coordinator frontier_extractor --ros-args -p use_sim_time:=false
-ros2 run search_coordinator coordinator_node --ros-args -p use_sim_time:=false
+ros2 run search_coordinator map_odom_relay --ros-args -p use_sim_time:=false      # применяет MapOdomCorrection с edge
+ros2 run search_coordinator coordinator_node --ros-args -p use_sim_time:=false    # executive: SeekObject FSM + 5 skill-серверов
+ros2 run search_coordinator frontier_extractor --ros-args -p use_sim_time:=false  # только для FLAT (VLM фронтиры не использует)
 ```
-Затем запустите миссию точно так же, как в 3a (FLAT) / 3c (VLM), но с `use_sim_time:=false`.
+`coordinator_node` поднимает skill-серверы (`go_to_pose`, `approach_detection`, `explore_frontier`,
+`get_observation`, `stop`), которыми и управляет orchestrator с edge в VLM-режиме. `frontier_extractor`
+нужен только FLAT-режиму.
+
+### 4c. Запуск миссии на железе (с любой машины графа ROS)
+```bash
+# FLAT (исполнителем владеет Pi):
+ros2 action send_goal /seek_object object_tracking_msgs/action/SeekObject \
+  "{instruction: 'bus', request_id: 'm1', mission_epoch: 0, allow_vlm: false}" --feedback
+
+# VLM (исполнителем владеет orchestrator на edge -> гоняет skill-ы Pi):
+#   нужен §4a orchestrator. Цель -- ЧИСТЫЙ лейбл.
+ros2 topic pub --once /vlm_mission std_msgs/msg/String "{data: 'bus'}"
+```
+> **СНАЧАЛА пройдите раздел B (safety) в `HIL_BRINGUP_CHECKLIST.md` — колёса над землёй.** Не запускайте
+> автономную миссию, пока B1–B7 не зелёные. Полная последовательность ввода в эксплуатацию (time-sync,
+> transport, восприятие, FLAT→VLM, деградация) — там же, разделы C–I.
 
 ---
 
@@ -124,11 +180,19 @@ ros2 run search_coordinator coordinator_node --ros-args -p use_sim_time:=false
   epoch инкрементируется, старая миссия получает PREEMPTED, незавершённые skill-goal-ы отклоняются как zombie.
 
 ## 6. Мониторинг
-- `ros2 topic echo /planner/notes` — компактные заметки VLM + token_estimate.
-- `ros2 topic echo /frontiers` — список frontier-ов + закоммиченный id.
+- `ros2 topic echo /planner/notes` — компактные заметки VLM + token_estimate (вкл. результаты DETECT_ALL).
+- `ros2 topic echo /frontiers` — список frontier-ов + закоммиченный id (для FLAT).
 - `ros2 action list` / `ros2 node list` — подтвердить, что серверы подняты.
 - Heartbeat-ы: executive логирует `/heartbeat deadline missed`, когда продюсер (edge) молчит.
-- Логи: каждая нода печатает свою фазу; orchestrator логирует `step N: <ACTION> (rationale)`.
+- Логи orchestrator (3 строки на шаг) — видно, **что VLM видела и что решила**:
+  ```
+  observe@step N: 1 detection(s) best='bus' conf=0.66 @1.68m, notes=2, map=yes -> asking OpenAICompatibleClient
+  plan@step N: VLM returned 1 action(s): DRIVE_FORWARD +0.50m
+  step N: DRIVE_FORWARD +0.50m -- <rationale>
+  ```
+  `conf` низкая (≈0.45) → детекция слабая/краевая (см. `detect_conf`). `map=no` → карта не пришла
+  (`/map` нет или `send_map:=false`). `DEGRADED: ran in FLAT fallback` в конце → VLM-эндпоинт упал
+  (circuit-breaker), миссия доехала на mock — подними `vlm_timeout_s` / поставь `send_map:=false`.
 
 ## 7. Деградация (FMEA 5.1) — ожидаемое поведение
 Если VLM потерян (таймаут/недоступность → circuit-breaker открывается), orchestrator **защёлкивается
@@ -149,3 +213,14 @@ ros2 run search_coordinator coordinator_node --ros-args -p use_sim_time:=false
   публикуется (`/camera/camera/aligned_depth_to_color/image_raw`) и задан `use_depth:=true`.
 - **Неожиданно `client=MockVlmClient` у VLM:** не разрешён base_url — выполните `source vlm.env` (или передайте
   `-p vlm_base_url:=`) и не передавайте `use_mock:=true`.
+- **Миссия уходит в `DEGRADED` (FLAT fallback):** реальный VLM-эндпоинт упал/таймаутил 3 раза подряд
+  (circuit-breaker). Подними `-p vlm_timeout_s:=30..60` и/или `-p send_map:=false` (два изображения тяжелее).
+- **VLM объявляет `DONE`/`reached`, а робот не у цели:** слабая/краевая детекция. Признак — `conf≈0.45`
+  в `observe@`. Используй ЧИСТЫЙ лейбл (`bus`, не `ride to bus`) и `-p detect_conf:=0.5`.
+- **VLM «видит» цель, хотя не смотрит на неё:** проверь `conf`/`distance_m` в `observe@`. FOV камеры
+  всего ~62° (±31°); если цель реально вне кадра — детектор отдаёт `0 detection(s)` (проверено). Если
+  детекция есть — край баннера попал в кадр. Подними `detect_conf`, чтобы реагировать только на уверенные.
+- **`gz sim` падает SIGSEGV на старте (ТОЛЬКО симуляция):** баг gz-transport discovery на WSL —
+  `export GZ_IP=127.0.0.1` перед запуском + `pkill -9 -f 'gz sim'; pkill -9 -f ruby`. На железе Gazebo нет.
+- **Карта не приходит в VLM (`map=no` в логе):** нет паблишера `/map` (RTAB-Map не поднят на edge) или
+  `send_map:=false`, или у оркестратора нет cv2/numpy (запусти его из `~/ot_venv`).

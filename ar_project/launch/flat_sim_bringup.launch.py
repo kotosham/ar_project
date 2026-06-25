@@ -42,6 +42,7 @@ def generate_launch_description():
     use_sim_time = LaunchConfiguration('use_sim_time')
     world = LaunchConfiguration('world')
     odom_topic = LaunchConfiguration('odom_topic')
+    gui = LaunchConfiguration('gui')
 
     declare_use_sim_time = DeclareLaunchArgument(
         'use_sim_time', default_value='true',
@@ -52,10 +53,14 @@ def generate_launch_description():
     declare_odom_topic = DeclareLaunchArgument(
         'odom_topic', default_value='/odom',
         description='Odometry topic. /odom in sim (gz DiffDrive); /odometry/filtered on hardware (EKF).')
+    declare_gui = DeclareLaunchArgument(
+        'gui', default_value='false',
+        description='Show the Gazebo Sim GUI window (true) or run headless (false). '
+                    'Headless is the default for this full-stack bring-up; pass gui:=true to watch the sim.')
 
     sim = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(os.path.join(launch_dir, 'launch_sim.launch.py')),
-        launch_arguments={'gui': 'false', 'world': world}.items())
+        launch_arguments={'gui': gui, 'world': world}.items())
 
     rtabmap = TimerAction(period=10.0, actions=[
         IncludeLaunchDescription(
@@ -73,6 +78,11 @@ def generate_launch_description():
             launch_arguments={
                 'use_sim_time': use_sim_time,
                 'odom_topic': odom_topic,
+                # Pin Nav2's params explicitly: collision_monitor.launch.py (included via
+                # launch_sim) declares a 'params_file' arg defaulting to collision_monitor.yaml,
+                # and that LaunchConfiguration leaks into this include — without this line Nav2
+                # loads collision_monitor.yaml, DWB finds no critics, and lifecycle bringup aborts.
+                'params_file': os.path.join(pkg, 'config', 'nav2_params.yaml'),
             }.items())])
 
     executive = TimerAction(period=28.0, actions=[
@@ -88,6 +98,7 @@ def generate_launch_description():
         declare_use_sim_time,
         declare_world,
         declare_odom_topic,
+        declare_gui,
         sim,
         rtabmap,
         nav2,

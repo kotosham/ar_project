@@ -3,10 +3,13 @@
 
     <xacro:include filename="inertial_macros.xacro"/>
 
-    <xacro:property name="chassis_mass" value="0.7"/>
+    <!-- Masses tuned for stable gz contact/traction. The original 0.01 kg wheels
+         gave tiny inertia (~5e-6) so the contact solver could rotate but not reliably
+         translate the body (wheels spun without gripping). Realistic values fix it. -->
+    <xacro:property name="chassis_mass" value="1.5"/>
     <xacro:property name="wheel_radius" value="0.038"/>
     <xacro:property name="wheel_thickness" value="0.033"/>
-    <xacro:property name="wheel_mass" value="0.01"/>
+    <xacro:property name="wheel_mass" value="0.25"/>
     <xacro:property name="chassis_length" value="0.36"/>
     <xacro:property name="chassis_width" value="0.30"/>
     <xacro:property name="chassis_height" value="0.03"/>
@@ -118,6 +121,8 @@
 
     <gazebo reference="left_wheel">
         <material>Gazebo/Blue</material>
+        <mu1>1.0</mu1>
+        <mu2>1.0</mu2>
     </gazebo>
 
     <!-- RIGHT WHEEL LINK -->
@@ -149,6 +154,8 @@
 
     <gazebo reference="right_wheel">
         <material>Gazebo/Blue</material>
+        <mu1>1.0</mu1>
+        <mu2>1.0</mu2>
     </gazebo>
 
     <!-- FRONT CENTER CASTER WHEEL LINK -->
@@ -167,8 +174,10 @@
             <material name="blue"/>
         </visual>
         <collision>
+            <!-- Passive omni support modelled as a sphere - point contact slides freely
+                 in any direction (a fixed cylinder skids and blocks in-place rotation). -->
             <geometry>
-                <cylinder radius="${wheel_radius}" length="${wheel_thickness}"/>
+                <sphere radius="${wheel_radius}"/>
             </geometry>
         </collision>
         <xacro:inertial_cylinder mass="${wheel_mass}" length="${wheel_thickness}" radius="${wheel_radius}">
@@ -178,5 +187,8 @@
 
     <gazebo reference="caster_wheel">
         <material>Gazebo/Blue</material>
+        <!-- Frictionless so the passive support never resists driving/turning. -->
+        <mu1>0.0</mu1>
+        <mu2>0.0</mu2>
     </gazebo>
 </robot>

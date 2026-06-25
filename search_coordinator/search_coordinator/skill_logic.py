@@ -15,19 +15,25 @@ GOAL_STATUS_SUCCEEDED = 4
 
 def resolve_frontier(frontiers: list, frontier_id: int,
                      max_travel_m: float,
-                     exclude_ids: Optional[set] = None) -> Tuple[Optional[object], str]:
+                     exclude_ids: Optional[set] = None,
+                     min_travel_m: float = 0.0) -> Tuple[Optional[object], str]:
     """Pick a frontier for ExploreFrontier.
 
     `frontiers` is best-first (each has .id, .score, .distance_m). `frontier_id`:
     -1 => best after hysteresis (the published order already encodes it); >=0 =>
     that stable id. `max_travel_m` > 0 filters out frontiers farther than the cap.
+    `min_travel_m` > 0 filters out frontiers CLOSER than the floor: a frontier at
+    the robot's own position (distance_m≈0) gets the smallest distance penalty so
+    it scores highest, but driving to it is a no-op (Nav2 reports 'reached'
+    instantly and the robot never moves). Dropping near-zero frontiers makes the
+    explorer pick one far enough to actually travel and reveal new space.
     `exclude_ids` drops frontiers whose stable id is in the set — the explorer
     blacklists a frontier after Nav2 fails to reach it, so it tries the others
     and terminates cleanly once reachable space is exhausted instead of looping
     forever on an unreachable (e.g. behind-a-wall) frontier.
 
     Returns (frontier_or_None, reason) with reason in
-    {'OK','EMPTY','EXCLUDED','NO_MATCH','TOO_FAR'}.
+    {'OK','EMPTY','EXCLUDED','NO_MATCH','TOO_FAR','TOO_NEAR'}.
     """
     if not frontiers:
         return None, 'EMPTY'
@@ -36,6 +42,10 @@ def resolve_frontier(frontiers: list, frontier_id: int,
         candidates = [f for f in candidates if f.id not in exclude_ids]
         if not candidates:
             return None, 'EXCLUDED'
+    if min_travel_m and min_travel_m > 0.0:
+        candidates = [f for f in candidates if f.distance_m >= min_travel_m]
+        if not candidates:
+            return None, 'TOO_NEAR'
     if max_travel_m and max_travel_m > 0.0:
         candidates = [f for f in candidates if f.distance_m <= max_travel_m]
         if not candidates:

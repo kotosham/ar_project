@@ -261,8 +261,29 @@ class ExploreFrontierServer(SkillServer):
             self._fail_epoch = goal.mission_epoch
         snap = self._frontiers
         frontiers = list(snap.frontiers) if snap is not None else []
+        # Skip ONLY a frontier the robot is essentially standing on (distance≈0):
+        # there explore_goal_xy can't derive a heading, returns the robot's own cell,
+        # and Nav2 'reaches' instantly with no motion. A merely-close frontier (e.g.
+        # 0.1 m) is fine -- explore_goal_xy clamps the goal to explore_min_drive_m so
+        # the robot still travels ~0.25 m. (A 0.25 m filter was too aggressive: it left
+        # a dead window when the nearest frontier was the boundary and the rest exceeded
+        # the orchestrator's max_travel cap -> NO_FRONTIER, robot frozen.)
+        DEGENERATE_FRONTIER_M = 0.05
         sel, reason = resolve_frontier(frontiers, goal.frontier_id, goal.max_travel_m,
-                                       exclude_ids=self._failed_ids)
+                                       exclude_ids=self._failed_ids,
+                                       min_travel_m=DEGENERATE_FRONTIER_M)
+        if sel is None and reason in ('NO_MATCH', 'TOO_NEAR') and goal.frontier_id >= 0:
+            # A VLM-chosen frontier id can go stale between plan and dispatch (the
+            # frontier_extractor regenerates ids each map update), which otherwise
+            # stalls the mission on NO_FRONTIER. Honor the "explore" intent: fall
+            # back to the best current non-degenerate frontier.
+            sel, reason = resolve_frontier(frontiers, -1, goal.max_travel_m,
+                                           exclude_ids=self._failed_ids,
+                                           min_travel_m=DEGENERATE_FRONTIER_M)
+            if sel is not None:
+                self.node.get_logger().info(
+                    'explore_frontier: requested frontier id=%d is stale; fell back to best id=%d'
+                    % (goal.frontier_id, sel.id))
         if sel is None:
             self.node.get_logger().info('explore_frontier: NO_FRONTIER (%s, %d blacklisted)'
                                         % (reason, len(self._failed_ids)))
@@ -369,6 +390,13 @@ class ApproachDetectionServer(SkillServer):
         node.declare_parameter('approach_camera_info_topic', '/camera/camera_info')
         node.declare_parameter('approach_min_depth_m', 0.1)
         node.declare_parameter('approach_max_depth_m', 8.0)
+        # A detector with a minimum range (e.g. a billboard/large object that
+        # overflows the camera frame at close range) legitimately loses the target
+        # in the final stretch of the approach. If we tracked the target until the
+        # robot was already within this distance of the standoff goal, a reach whose
+        # detection has since gone stale is accepted as SUCCEEDED rather than a false
+        # reach. A target lost while still FAR stays STALE/LOST (likely transient).
+        node.declare_parameter('approach_reacquire_dist_m', 0.8)
         node.create_subscription(PointStamped, '/target_pixel', self._on_pixel,
                                  detection_stream_nodeadline(), callback_group=self._sub_group)
         node.create_subscription(CameraInfo,
@@ -394,10 +422,13 @@ class ApproachDetectionServer(SkillServer):
         # Pre-drive gate: classify LOST_TARGET / STALE_DETECTION before moving.
         px = self._last_pixel
         if px is None:
+            self.node.get_logger().warn('approach_detection: LOST_TARGET (no /target_pixel received)')
             result.outcome = ApproachDetection.Result.LOST_TARGET
             return 'abort', result
         age = self._pixel_age(px)
         if not is_fresh(age, max_age):
+            self.node.get_logger().warn(
+                'approach_detection: STALE_DETECTION (pixel age %.2fs > %.2fs)' % (age, max_age))
             result.outcome = ApproachDetection.Result.STALE_DETECTION
             return 'abort', result
 
@@ -405,28 +436,64 @@ class ApproachDetectionServer(SkillServer):
         if pose is None:
             # cannot compute geometry (no intrinsics / TF) — treat as lost, never
             # drive blindly.
+            self.node.get_logger().warn(
+                'approach_detection: LOST_TARGET (cannot compute goal; intr=%s depth=%.2f)'
+                % (self._intr is not None, px.point.z))
             result.outcome = ApproachDetection.Result.LOST_TARGET
             return 'abort', result
+        self.node.get_logger().info(
+            'approach_detection: px=(%.0f,%.0f) depth=%.2f age=%.2fs -> goal=(%.2f,%.2f) driving'
+            % (px.point.x, px.point.y, px.point.z, age,
+               pose.pose.position.x, pose.pose.position.y))
+
+        # Closest remaining-distance-to-goal at which we still had a FRESH detection.
+        # Lets us tell "lost at close range" (legit) from "lost while far" (suspect).
+        reacquire_dist = float(self.node.get_parameter('approach_reacquire_dist_m').value)
+        tracked = {'min_fresh_dist': float('inf')}
 
         def tick(dist):
             cur = self._last_pixel
             cage = self._pixel_age(cur) if cur is not None else None
+            fresh = is_fresh(cage, max_age)
+            if fresh and not math.isnan(dist):
+                tracked['min_fresh_dist'] = min(tracked['min_fresh_dist'], float(dist))
             fb = ApproachDetection.Feedback()
             fb.distance_to_target = 0.0 if math.isnan(dist) else float(dist)
             fb.detection_age_s = float(cage) if cage is not None else 1e3
-            fb.detection_fresh = is_fresh(cage, max_age)
+            fb.detection_fresh = fresh
             goal_handle.publish_feedback(fb)
 
         terminal, reached = self.nav.drive(goal_handle, pose, goal.mission_epoch,
                                            self.ms, tick)
+        self.node.get_logger().info('approach_detection: nav terminal=%s' % terminal)
         if terminal == 'reached':
-            # FMEA: only declare reached if the detection is STILL fresh.
+            # FMEA: declare reached if the detection is STILL fresh, OR if we tracked
+            # it until we were already near the goal (the detector's min-range blind
+            # spot, not a moved/false target). Lost-while-far stays STALE/LOST.
             cur = self._last_pixel
             cage = self._pixel_age(cur) if cur is not None else None
             if is_fresh(cage, max_age):
+                self.node.get_logger().info(
+                    'approach_detection: SUCCEEDED (reached pose, detection fresh age=%.2fs)'
+                    % (cage if cage is not None else -1.0))
                 result.outcome = ApproachDetection.Result.SUCCEEDED
                 result.reached_pose = reached
                 return 'succeed', result
+            if tracked['min_fresh_dist'] <= reacquire_dist:
+                self.node.get_logger().info(
+                    'approach_detection: SUCCEEDED (reached pose; target tracked to %.2fm <= '
+                    '%.2fm then lost at close range, age=%s)'
+                    % (tracked['min_fresh_dist'], reacquire_dist,
+                       '%.2fs' % cage if cage is not None else 'none'))
+                result.outcome = ApproachDetection.Result.SUCCEEDED
+                result.reached_pose = reached
+                return 'succeed', result
+            self.node.get_logger().warn(
+                'approach_detection: reached pose but detection NOT fresh (age=%s) and target '
+                'was lost while still far (min_fresh_dist=%.2fm) -> %s'
+                % ('%.2fs' % cage if cage is not None else 'none',
+                   tracked['min_fresh_dist'],
+                   'STALE' if cur is not None else 'LOST'))
             result.outcome = approach_not_reached_outcome_code(cur is not None)
             return 'abort', result
         if terminal == 'canceled':
@@ -435,6 +502,7 @@ class ApproachDetectionServer(SkillServer):
         if terminal == 'zombie':
             result.outcome = ApproachDetection.Result.PREEMPTED
             return 'abort', result
+        self.node.get_logger().warn('approach_detection: ABORTED (nav terminal=%s)' % terminal)
         result.outcome = ApproachDetection.Result.ABORTED
         return 'abort', result
 
