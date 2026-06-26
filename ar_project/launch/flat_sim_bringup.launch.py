@@ -30,6 +30,7 @@ from launch.actions import (
     IncludeLaunchDescription,
     TimerAction,
 )
+from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
@@ -43,13 +44,15 @@ def generate_launch_description():
     world = LaunchConfiguration('world')
     odom_topic = LaunchConfiguration('odom_topic')
     gui = LaunchConfiguration('gui')
+    rviz = LaunchConfiguration('rviz')
 
     declare_use_sim_time = DeclareLaunchArgument(
         'use_sim_time', default_value='true',
         description='Use the Gazebo /clock. true for this sim bring-up.')
     declare_world = DeclareLaunchArgument(
-        'world', default_value=os.path.join(pkg, 'worlds', 'oscillation.world'),
-        description='Gazebo world. Default: the bounded two-frontier oscillation world.')
+        'world', default_value=os.path.join(pkg, 'worlds', 'flat_detect.world'),
+        description='Gazebo world. Default: flat_detect.world with a bus billboard target. '
+                    'Use oscillation.world for frontier-only FLAT tests.')
     declare_odom_topic = DeclareLaunchArgument(
         'odom_topic', default_value='/odom',
         description='Odometry topic. /odom in sim (gz DiffDrive); /odometry/filtered on hardware (EKF).')
@@ -57,6 +60,9 @@ def generate_launch_description():
         'gui', default_value='false',
         description='Show the Gazebo Sim GUI window (true) or run headless (false). '
                     'Headless is the default for this full-stack bring-up; pass gui:=true to watch the sim.')
+    declare_rviz = DeclareLaunchArgument(
+        'rviz', default_value='false',
+        description='Launch RViz after the stack has started. Use rviz:=true for visual debugging.')
 
     sim = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(os.path.join(launch_dir, 'launch_sim.launch.py')),
@@ -94,13 +100,24 @@ def generate_launch_description():
              parameters=[{'use_sim_time': use_sim_time}]),
     ])
 
+    rviz_view = TimerAction(period=32.0, actions=[
+        IncludeLaunchDescription(
+            PythonLaunchDescriptionSource(os.path.join(launch_dir, 'rviz_launch.py')),
+            condition=IfCondition(rviz),
+            launch_arguments={
+                'use_sim_time': use_sim_time,
+                'config': os.path.join(pkg, 'config', 'drive_bot.rviz'),
+            }.items())])
+
     return LaunchDescription([
         declare_use_sim_time,
         declare_world,
         declare_odom_topic,
         declare_gui,
+        declare_rviz,
         sim,
         rtabmap,
         nav2,
         executive,
+        rviz_view,
     ])

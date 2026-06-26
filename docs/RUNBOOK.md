@@ -44,7 +44,9 @@
 ```bash
 # T1: bring up the whole FLAT stack (sim -> SLAM -> Nav2 -> executive)
 ros2 launch ar_project flat_sim_bringup.launch.py
-#   default world = oscillation.world; override: world:=$(ros2 pkg prefix ar_project)/share/ar_project/worlds/flat_detect.world
+#   default world = flat_detect.world with the bus billboard target.
+#   frontier-only world override:
+#   world:=$(ros2 pkg prefix ar_project)/share/ar_project/worlds/oscillation.world
 ```
 Подождите ~35 с, пока не увидите `search_coordinator up (Phase 2.2) ... epoch=0`.
 ```bash
@@ -70,6 +72,28 @@ DETECT/APPROACH executive потребляет `/target_pixel`. (Без дете
 подать синтетический — см. шаблон `~/inject_pixel.py` в FLAT_BASELINE.)
 
 ### 3c. VLM-миссия
+Для VLM-сценария используйте отдельный launch, чтобы не путать его с FLAT-миссией.
+Он поднимает ту же безопасную базу (Gazebo → SLAM → Nav2 → executive/skill servers), но
+по умолчанию открывает `flat_detect.world` с баннером `bus.jpg`, включает Gazebo GUI и RViz.
+
+Если хотите, чтобы launch сразу поднял edge-часть (`detect_target_server` + `planner_orchestrator`),
+сначала загрузите VLM-переменные в shell. Креды launch не печатает и не хранит:
+```bash
+set -a; source object_tracking/planner_orchestrator/vlm.env; set +a
+ros2 launch ar_project vlm_sim_bringup.launch.py start_edge:=true
+```
+
+Если edge-часть запускаете руками, оставьте `start_edge:=false` или просто не указывайте его:
+```bash
+ros2 launch ar_project vlm_sim_bringup.launch.py
+```
+
+После запуска миссии командует именно VLM-orchestrator, а не FLAT `/seek_object`:
+```bash
+ros2 topic pub --once /vlm_mission std_msgs/msg/String "{data: bus}"
+```
+
+Ручной вариант edge-части:
 ```bash
 # detector running (3b) + executive up. In the orchestrator shell:
 set -a; source object_tracking/planner_orchestrator/vlm.env; set +a   # loads VLM_* (never printed)

@@ -9,6 +9,8 @@ from launch.substitutions import LaunchConfiguration
 
 def _build_clean_gui_env():
     # VS Code from snap leaks GTK / SNAP runtime variables that crash RViz.
+    # Keep ROS/DDS discovery variables though, otherwise RViz can silently start
+    # in a different graph/domain and show no map, TF or images.
     keep = [
         'HOME',
         'USER',
@@ -19,6 +21,14 @@ def _build_clean_gui_env():
         'XDG_RUNTIME_DIR',
         'XAUTHORITY',
         'PATH',
+        'ROS_DOMAIN_ID',
+        'ROS_LOCALHOST_ONLY',
+        'ROS_AUTOMATIC_DISCOVERY_RANGE',
+        'ROS_STATIC_PEERS',
+        'ROS_DISCOVERY_SERVER',
+        'RMW_IMPLEMENTATION',
+        'FASTRTPS_DEFAULT_PROFILES_FILE',
+        'CYCLONEDDS_URI',
     ]
     env = {key: os.environ[key] for key in keep if os.environ.get(key)}
     env['PATH'] = os.pathsep.join(
