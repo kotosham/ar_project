@@ -24,11 +24,13 @@ class ExperimentMetricsLogger(Node):
         self.declare_parameter('prompt_topic', '/target_prompt')
         self.declare_parameter('target_pixel_topic', '/target_pixel')
         self.declare_parameter('cv_runtime_topic', '/experiment/cv_runtime')
+        self.declare_parameter('cv_model_topic', '/experiment/cv_model')
         self.declare_parameter('goal_topic', '/goal_pose')
         self.declare_parameter('target_point_topic', '/experiment/target_point')
         self.declare_parameter('fd_auto_topic', '/experiment/fd_auto')
         self.declare_parameter('nav_status_topic', '/navigate_to_pose/_action/status')
         self.declare_parameter('trial_timeout_s', 30.0)
+        self.declare_parameter('max_trial_timeout_s', 120.0)
         self.declare_parameter('output_csv', '~/ros2_ws/experiment_logs/experiment_metrics.csv')
         self.declare_parameter('enable_fd_auto_measurement', False)
         self.declare_parameter('fd_auto_wait_s', 1.0)
@@ -40,11 +42,13 @@ class ExperimentMetricsLogger(Node):
         self.prompt_topic = str(self.get_parameter('prompt_topic').value)
         self.target_pixel_topic = str(self.get_parameter('target_pixel_topic').value)
         self.cv_runtime_topic = str(self.get_parameter('cv_runtime_topic').value)
+        self.cv_model_topic = str(self.get_parameter('cv_model_topic').value)
         self.goal_topic = str(self.get_parameter('goal_topic').value)
         self.target_point_topic = str(self.get_parameter('target_point_topic').value)
         self.fd_auto_topic = str(self.get_parameter('fd_auto_topic').value)
         self.nav_status_topic = str(self.get_parameter('nav_status_topic').value)
         self.trial_timeout_s = float(self.get_parameter('trial_timeout_s').value)
+        self.max_trial_timeout_s = float(self.get_parameter('max_trial_timeout_s').value)
         self.output_csv = Path(str(self.get_parameter('output_csv').value)).expanduser()
         self.enable_fd_auto_measurement = bool(self.get_parameter('enable_fd_auto_measurement').value)
         self.fd_auto_wait_s = float(self.get_parameter('fd_auto_wait_s').value)
@@ -59,6 +63,7 @@ class ExperimentMetricsLogger(Node):
         self.csv_fields = [
             'trial_id',
             'prompt',
+            'cv_model',
             'prompt_time_iso',
             'cv_runtime_s',
             'goal_publish_latency_s',
@@ -71,10 +76,14 @@ class ExperimentMetricsLogger(Node):
 
         self.current_trial = None
         self.next_trial_id = self._load_next_trial_id()
+        self.latest_cv_model = ''
 
         tracking_input_qos = QoSProfile(depth=1)
         tracking_input_qos.reliability = ReliabilityPolicy.BEST_EFFORT
         tracking_input_qos.durability = DurabilityPolicy.VOLATILE
+        latched_state_qos = QoSProfile(depth=1)
+        latched_state_qos.durability = DurabilityPolicy.TRANSIENT_LOCAL
+        latched_state_qos.reliability = ReliabilityPolicy.RELIABLE
 
         self.prompt_sub = self.create_subscription(String, self.prompt_topic, self.prompt_callback, 10)
         self.target_pixel_sub = self.create_subscription(
@@ -89,6 +98,12 @@ class ExperimentMetricsLogger(Node):
             self.cv_runtime_topic,
             self.cv_runtime_callback,
             10,
+        )
+        self.cv_model_sub = self.create_subscription(
+            String,
+            self.cv_model_topic,
+            self.cv_model_callback,
+            latched_state_qos,
         )
         self.target_point_sub = self.create_subscription(
             PointStamped,
@@ -116,24 +131,44 @@ class ExperimentMetricsLogger(Node):
 
         self.get_logger().info(
             f'Experiment metrics logger writing to {self.output_csv} '
-            f'(timeout={self.trial_timeout_s:.1f}s, '
+            f'(stall_timeout={self.trial_timeout_s:.1f}s, '
+            f'max_trial_timeout={self.max_trial_timeout_s:.1f}s, '
             f'fd_auto_measurement={"on" if self.enable_fd_auto_measurement else "off"}, '
-            f'fd_auto_topic={self.fd_auto_topic}).'
+            f'fd_auto_topic={self.fd_auto_topic}, '
+            f'cv_model_topic={self.cv_model_topic}).'
         )
 
     def prompt_callback(self, msg):
+        prompt = str(msg.data).strip()
+        if not prompt:
+            self.get_logger().warn('Ignoring empty prompt message.')
+            return
+
         if self.current_trial is not None:
+            if prompt == self.current_trial['prompt']:
+                duplicate_count = self.current_trial.get('duplicate_prompt_count', 0) + 1
+                self.current_trial['duplicate_prompt_count'] = duplicate_count
+                if duplicate_count == 1:
+                    self.get_logger().info(
+                        f'Ignoring duplicate prompt "{prompt}" while trial '
+                        f'{self.current_trial["trial_id"]} is still active.'
+                    )
+                return
+
             self._finalize_trial('superseded', time.monotonic())
 
         now_monotonic = time.monotonic()
         now_iso = datetime.now().isoformat(timespec='seconds')
         self.current_trial = {
             'trial_id': self.next_trial_id,
-            'prompt': msg.data,
+            'prompt': prompt,
+            'cv_model': self.latest_cv_model,
             'prompt_time_iso': now_iso,
             'start_monotonic': now_monotonic,
             'start_ros_ns': self._now_ros_ns(),
+            'last_progress_monotonic': now_monotonic,
             'target_pixel_monotonic': None,
+            'last_target_pixel_monotonic': None,
             'cv_runtime_s': None,
             'goal_monotonic': None,
             'fd_auto_m': None,
@@ -143,19 +178,28 @@ class ExperimentMetricsLogger(Node):
             'fd_auto_wait_deadline_monotonic': None,
             'current_goal_status_min_ns': 0,
             'goal_publish_count': 0,
+            'duplicate_prompt_count': 0,
         }
         self.next_trial_id += 1
 
         self.get_logger().info(
-            f'Started trial {self.current_trial["trial_id"]} for prompt "{msg.data}".'
+            f'Started trial {self.current_trial["trial_id"]} for prompt "{prompt}".'
         )
+
+    def cv_model_callback(self, msg):
+        self.latest_cv_model = str(msg.data).strip()
+        if self.current_trial is not None and not self.current_trial.get('cv_model'):
+            self.current_trial['cv_model'] = self.latest_cv_model
 
     def target_pixel_callback(self, _msg):
         if self.current_trial is None:
             return
 
+        now_monotonic = time.monotonic()
+        self.current_trial['last_progress_monotonic'] = now_monotonic
+        self.current_trial['last_target_pixel_monotonic'] = now_monotonic
         if self.current_trial['target_pixel_monotonic'] is None:
-            self.current_trial['target_pixel_monotonic'] = time.monotonic()
+            self.current_trial['target_pixel_monotonic'] = now_monotonic
             cv_runtime = (
                 self.current_trial['target_pixel_monotonic'] - self.current_trial['start_monotonic']
             )
@@ -174,6 +218,8 @@ class ExperimentMetricsLogger(Node):
         if self.current_trial is None:
             return
 
+        now_monotonic = time.monotonic()
+        self.current_trial['last_progress_monotonic'] = now_monotonic
         goal_stamp_ns = self._stamp_to_ns(_msg.header.stamp)
         if goal_stamp_ns == 0:
             goal_stamp_ns = self._now_ros_ns()
@@ -182,7 +228,7 @@ class ExperimentMetricsLogger(Node):
         self.current_trial['goal_publish_count'] += 1
 
         if self.current_trial['goal_monotonic'] is None:
-            self.current_trial['goal_monotonic'] = time.monotonic()
+            self.current_trial['goal_monotonic'] = now_monotonic
             goal_latency = self.current_trial['goal_monotonic'] - self.current_trial['start_monotonic']
             self.get_logger().info(
                 f'Trial {self.current_trial["trial_id"]}: goal published, '
@@ -273,8 +319,26 @@ class ExperimentMetricsLogger(Node):
                 self._finalize_pending_success()
             return
 
-        elapsed = time.monotonic() - self.current_trial['start_monotonic']
-        if elapsed < self.trial_timeout_s:
+        now_monotonic = time.monotonic()
+        elapsed = now_monotonic - self.current_trial['start_monotonic']
+        if elapsed >= self.max_trial_timeout_s:
+            if self.current_trial['target_pixel_monotonic'] is None:
+                outcome = 'no_detection_timeout'
+            elif self.current_trial['goal_monotonic'] is None:
+                outcome = 'goal_publish_timeout'
+            else:
+                outcome = 'nav_timeout'
+
+            self.get_logger().warn(
+                f'Trial {self.current_trial["trial_id"]}: reached hard timeout '
+                f'of {self.max_trial_timeout_s:.1f}s.'
+            )
+            self._finalize_trial(outcome, now_monotonic)
+            return
+
+        last_progress = self.current_trial.get('last_progress_monotonic') or self.current_trial['start_monotonic']
+        stalled_for = now_monotonic - last_progress
+        if stalled_for < self.trial_timeout_s:
             return
 
         if self.current_trial['target_pixel_monotonic'] is None:
@@ -284,7 +348,11 @@ class ExperimentMetricsLogger(Node):
         else:
             outcome = 'nav_timeout'
 
-        self._finalize_trial(outcome, time.monotonic())
+        self.get_logger().warn(
+            f'Trial {self.current_trial["trial_id"]}: no progress for {stalled_for:.1f}s '
+            f'(stall timeout={self.trial_timeout_s:.1f}s, total_elapsed={elapsed:.1f}s).'
+        )
+        self._finalize_trial(outcome, now_monotonic)
 
     def _finalize_trial(self, outcome, end_monotonic):
         if self.current_trial is None:
@@ -297,6 +365,7 @@ class ExperimentMetricsLogger(Node):
         row = {
             'trial_id': self.current_trial['trial_id'],
             'prompt': self.current_trial['prompt'],
+            'cv_model': self.current_trial.get('cv_model', ''),
             'prompt_time_iso': self.current_trial['prompt_time_iso'],
             'cv_runtime_s': self._format_duration(
                 self.current_trial.get('cv_runtime_s')

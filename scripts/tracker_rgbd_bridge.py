@@ -95,6 +95,7 @@ class TrackerRgbdBridge(Node):
             )
             return
 
+        self._reset_stream_cycle()
         self.current_prompt = msg.data
         self.goal_locked = False
         self.streaming_enabled = bool(self.current_prompt)
@@ -109,6 +110,7 @@ class TrackerRgbdBridge(Node):
         self.goal_locked = bool(msg.data)
         if self.pause_on_goal_lock and self.goal_locked:
             completed_prompt = self.current_prompt
+            self._reset_stream_cycle()
             self.streaming_enabled = False
             self.current_prompt = None
             self.get_logger().info('Disabled continuous RGB-D export because goal lock was received.')
@@ -206,6 +208,11 @@ class TrackerRgbdBridge(Node):
     @staticmethod
     def _stamp_to_ns(stamp):
         return int(stamp.sec) * 1_000_000_000 + int(stamp.nanosec)
+
+    def _reset_stream_cycle(self):
+        self.rgb_buffer.clear()
+        self.depth_buffer.clear()
+        self.last_publish_time = 0.0
 
 
 def main(args=None):

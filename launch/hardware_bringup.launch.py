@@ -1,7 +1,6 @@
 import os
 
 from ament_index_python.packages import get_package_share_directory
-from nav2_common.launch import RewrittenYaml
 
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, RegisterEventHandler
@@ -16,7 +15,6 @@ from launch.substitutions import (
     PythonExpression,
 )
 from launch_ros.actions import Node
-from launch_ros.descriptions import ParameterFile
 
 
 def generate_launch_description():
@@ -39,22 +37,6 @@ def generate_launch_description():
     imu_topic = LaunchConfiguration('imu_topic')
     filtered_imu_topic = LaunchConfiguration('filtered_imu_topic')
     odom_input_topic = LaunchConfiguration('odom_input_topic')
-    wheel_separation_multiplier = LaunchConfiguration('wheel_separation_multiplier')
-    left_wheel_radius_multiplier = LaunchConfiguration('left_wheel_radius_multiplier')
-    right_wheel_radius_multiplier = LaunchConfiguration('right_wheel_radius_multiplier')
-
-    configured_controllers = ParameterFile(
-        RewrittenYaml(
-            source_file=controllers_file,
-            param_rewrites={
-                'wheel_separation_multiplier': wheel_separation_multiplier,
-                'left_wheel_radius_multiplier': left_wheel_radius_multiplier,
-                'right_wheel_radius_multiplier': right_wheel_radius_multiplier,
-            },
-            convert_types=True,
-        ),
-        allow_substs=True,
-    )
 
     robot_description_content = Command(
         [
@@ -71,7 +53,7 @@ def generate_launch_description():
     control_node = Node(
         package='controller_manager',
         executable='ros2_control_node',
-        parameters=[robot_description, configured_controllers],
+        parameters=[robot_description, controllers_file],
         output='screen',
     )
 
@@ -261,8 +243,8 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             'enable_imu_orientation_filter',
-            default_value='true',
-            description='Run imu_filter_madgwick on the RealSense IMU and feed filtered yaw + yaw rate into the EKF.',
+            default_value='false',
+            description='Run imu_filter_madgwick and feed filtered yaw + yaw rate into the EKF. Disabled by default because D435i yaw orientation drifts without a magnetometer.',
         ),
         DeclareLaunchArgument(
             'imu_topic',
@@ -278,21 +260,6 @@ def generate_launch_description():
             'odom_input_topic',
             default_value='/diff_cont/odom',
             description='Raw wheel odometry input topic fused by the EKF.',
-        ),
-        DeclareLaunchArgument(
-            'wheel_separation_multiplier',
-            default_value='1.0052',
-            description='Calibration multiplier for differential-drive wheel separation. Primarily affects turn-angle accuracy.',
-        ),
-        DeclareLaunchArgument(
-            'left_wheel_radius_multiplier',
-            default_value='1.0249',
-            description='Calibration multiplier for the left wheel radius. Use the same value on both sides for average straight-distance calibration.',
-        ),
-        DeclareLaunchArgument(
-            'right_wheel_radius_multiplier',
-            default_value='1.0249',
-            description='Calibration multiplier for the right wheel radius. Adjust asymmetrically only for persistent left/right drift.',
         ),
         control_node,
         robot_state_publisher,

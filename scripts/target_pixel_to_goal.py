@@ -40,13 +40,21 @@ class TargetPixelToGoal(Node):
         self.declare_parameter('depth_match_tolerance', 0.35)
         self.declare_parameter('min_depth_m', 0.1)
         self.declare_parameter('max_depth_m', 6.0)
+        self.declare_parameter('embedded_depth_guard_radius_px', 12)
+        self.declare_parameter('embedded_depth_guard_margin_m', 0.20)
+        self.declare_parameter('embedded_depth_guard_band_m', 0.05)
+        self.declare_parameter('embedded_depth_guard_min_pixels', 3)
         self.declare_parameter('min_goal_update_distance', 0.15)
         self.declare_parameter('min_goal_update_angle', 0.2)
+        self.declare_parameter('max_goal_update_distance', 0.50)
+        self.declare_parameter('max_goal_update_angle', 0.70)
         self.declare_parameter('max_target_pixel_age_s', 1.5)
         self.declare_parameter('lock_goal_on_publish', True)
-        self.declare_parameter('final_approach_freeze_distance', 0.60)
+        self.declare_parameter('final_approach_freeze_distance', 0.80)
+        self.declare_parameter('goal_update_freeze_distance', 0.60)
         self.declare_parameter('required_stable_detections', 2)
         self.declare_parameter('stable_pixel_tolerance', 40.0)
+        self.declare_parameter('embedded_stable_pixel_tolerance', 90.0)
         self.declare_parameter('front_robot_x', 0.275)
         self.declare_parameter('front_robot_y', 0.0)
         self.declare_parameter('fd_distance_mode', 'forward')
@@ -72,13 +80,33 @@ class TargetPixelToGoal(Node):
         self.depth_match_tolerance = float(self.get_parameter('depth_match_tolerance').value)
         self.min_depth_m = float(self.get_parameter('min_depth_m').value)
         self.max_depth_m = float(self.get_parameter('max_depth_m').value)
+        self.embedded_depth_guard_radius_px = max(
+            0,
+            int(self.get_parameter('embedded_depth_guard_radius_px').value),
+        )
+        self.embedded_depth_guard_margin_m = float(
+            self.get_parameter('embedded_depth_guard_margin_m').value
+        )
+        self.embedded_depth_guard_band_m = float(
+            self.get_parameter('embedded_depth_guard_band_m').value
+        )
+        self.embedded_depth_guard_min_pixels = max(
+            1,
+            int(self.get_parameter('embedded_depth_guard_min_pixels').value),
+        )
         self.min_goal_update_distance = float(self.get_parameter('min_goal_update_distance').value)
         self.min_goal_update_angle = float(self.get_parameter('min_goal_update_angle').value)
+        self.max_goal_update_distance = float(self.get_parameter('max_goal_update_distance').value)
+        self.max_goal_update_angle = float(self.get_parameter('max_goal_update_angle').value)
         self.max_target_pixel_age_s = float(self.get_parameter('max_target_pixel_age_s').value)
         self.lock_goal_on_publish = bool(self.get_parameter('lock_goal_on_publish').value)
         self.final_approach_freeze_distance = float(self.get_parameter('final_approach_freeze_distance').value)
+        self.goal_update_freeze_distance = float(self.get_parameter('goal_update_freeze_distance').value)
         self.required_stable_detections = max(1, int(self.get_parameter('required_stable_detections').value))
         self.stable_pixel_tolerance = float(self.get_parameter('stable_pixel_tolerance').value)
+        self.embedded_stable_pixel_tolerance = float(
+            self.get_parameter('embedded_stable_pixel_tolerance').value
+        )
         self.front_robot_x = float(self.get_parameter('front_robot_x').value)
         self.front_robot_y = float(self.get_parameter('front_robot_y').value)
         self.fd_distance_mode = str(self.get_parameter('fd_distance_mode').value).strip().lower()
@@ -153,8 +181,10 @@ class TargetPixelToGoal(Node):
             f'using embedded point.z depth when available, otherwise falling back to local depth topic {self.depth_topic}; '
             f'approach_offset={self.approach_offset:.2f}m, '
             f'max_target_pixel_age_s={self.max_target_pixel_age_s:.2f}s, '
+            f'embedded_depth_guard_radius_px={self.embedded_depth_guard_radius_px}, '
             f'lock_goal_on_publish={self.lock_goal_on_publish}, '
             f'final_approach_freeze_distance={self.final_approach_freeze_distance:.2f}m, '
+            f'goal_update_freeze_distance={self.goal_update_freeze_distance:.2f}m, '
             f'required_stable_detections={self.required_stable_detections}, '
             f'fd_auto_topic={self.fd_auto_topic}'
         )
@@ -287,6 +317,9 @@ class TargetPixelToGoal(Node):
                 ):
                     remaining.append(entry)
                     continue
+            elif self.embedded_depth_guard_radius_px > 0:
+                target_stamp_ns = self._stamp_to_ns(msg.header.stamp)
+                depth_frame = self._find_matching_depth_frame(target_stamp_ns, warn=False)
 
             if not self._process_target_pixel_message(msg, depth_frame, mask_frame, embedded_depth_m):
                 continue
@@ -321,6 +354,16 @@ class TargetPixelToGoal(Node):
             if not source_frame_id:
                 self.get_logger().warn('Embedded-depth target pixel is missing header.frame_id.')
                 return False
+            guarded_target = self._select_embedded_depth_guard_pixel(
+                u_center,
+                v_center,
+                depth_frame,
+                depth_m,
+            )
+            if guarded_target is not None:
+                u, v, depth_m = guarded_target
+                source_frame_id = depth_frame['frame_id']
+                source_stamp = depth_frame['stamp']
         else:
             if not (0 <= u_center < depth_frame['width'] and 0 <= v_center < depth_frame['height']):
                 self.get_logger().warn(f'Target pixel out of bounds: ({u_center}, {v_center})')
@@ -373,6 +416,9 @@ class TargetPixelToGoal(Node):
         dx = point_world.point.x - robot_x
         dy = point_world.point.y - robot_y
         distance = math.hypot(dx, dy)
+        if self._should_freeze_near_current_goal(robot_x, robot_y):
+            return False
+
         if self._should_freeze_final_approach(distance):
             return False
 
@@ -392,7 +438,10 @@ class TargetPixelToGoal(Node):
         goal.pose.position.y = goal_y
         goal.pose.orientation = self._yaw_to_quaternion(yaw)
 
-        if not self._should_publish_goal(goal, yaw):
+        should_publish, reject_reason = self._evaluate_goal_update(goal, yaw)
+        if not should_publish:
+            if reject_reason:
+                self.get_logger().warn(reject_reason)
             return False
 
         self.goal_pub.publish(goal)
@@ -619,6 +668,12 @@ class TargetPixelToGoal(Node):
 
     def _update_stability(self, msg):
         pixel = np.array([float(msg.point.x), float(msg.point.y)], dtype=np.float32)
+        effective_tolerance = self.stable_pixel_tolerance
+        if self._extract_embedded_depth(msg) is not None:
+            effective_tolerance = max(
+                self.stable_pixel_tolerance,
+                self.embedded_stable_pixel_tolerance,
+            )
 
         if self.pending_pixel is None:
             self.pending_pixel = pixel
@@ -631,7 +686,7 @@ class TargetPixelToGoal(Node):
             return self.required_stable_detections == 1
 
         pixel_delta = float(np.linalg.norm(pixel - self.pending_pixel))
-        if pixel_delta <= self.stable_pixel_tolerance:
+        if pixel_delta <= effective_tolerance:
             self.pending_pixel_count += 1
             self.pending_pixel = pixel
         else:
@@ -647,29 +702,98 @@ class TargetPixelToGoal(Node):
 
         return True
 
-    def _find_matching_depth_frame(self, target_stamp_ns):
+    def _find_matching_depth_frame(self, target_stamp_ns, warn=True):
         if not self.depth_buffer:
             return None
 
         best = min(self.depth_buffer, key=lambda frame: abs(frame['stamp_ns'] - target_stamp_ns))
         delta_s = abs(best['stamp_ns'] - target_stamp_ns) / 1e9
         if delta_s > self.depth_match_tolerance:
-            self.get_logger().warn(
-                f'Closest depth frame is too far from RGB stamp: {delta_s:.3f}s > {self.depth_match_tolerance:.3f}s'
-            )
+            if warn:
+                self.get_logger().warn(
+                    f'Closest depth frame is too far from RGB stamp: {delta_s:.3f}s > {self.depth_match_tolerance:.3f}s'
+                )
             return None
         return best
 
-    def _should_publish_goal(self, goal, yaw):
+    def _select_embedded_depth_guard_pixel(self, u_center, v_center, depth_frame, embedded_depth_m):
+        if depth_frame is None:
+            return None
+
+        depth = depth_frame['depth']
+        height, width = depth.shape
+        if not (0 <= u_center < width and 0 <= v_center < height):
+            return None
+
+        radius = self.embedded_depth_guard_radius_px
+        u_min = max(0, u_center - radius)
+        u_max = min(width, u_center + radius + 1)
+        v_min = max(0, v_center - radius)
+        v_max = min(height, v_center + radius + 1)
+        window = depth[v_min:v_max, u_min:u_max]
+        valid = (
+            np.isfinite(window)
+            & (window >= self.min_depth_m)
+            & (window <= self.max_depth_m)
+        )
+        if not np.any(valid):
+            return None
+
+        nearest_depth = float(np.min(window[valid]))
+        if nearest_depth + self.embedded_depth_guard_margin_m >= embedded_depth_m:
+            return None
+
+        band_m = max(0.0, self.embedded_depth_guard_band_m)
+        front_band = valid & (window <= nearest_depth + band_m)
+        if int(np.count_nonzero(front_band)) < self.embedded_depth_guard_min_pixels:
+            return None
+
+        candidate_pixels = np.argwhere(front_band)
+        local_center_u = float(u_center - u_min)
+        local_center_v = float(v_center - v_min)
+        dv = candidate_pixels[:, 0].astype(np.float32) - local_center_v
+        du = candidate_pixels[:, 1].astype(np.float32) - local_center_u
+        best_idx = int(np.argmin(du * du + dv * dv))
+        v = int(candidate_pixels[best_idx, 0] + v_min)
+        u = int(candidate_pixels[best_idx, 1] + u_min)
+        guarded_depth_m = float(depth[v, u])
+
+        self.get_logger().info(
+            'Embedded target depth guarded by local depth: '
+            f'pixel=({u_center}, {v_center}) -> ({u}, {v}), '
+            f'embedded_depth={embedded_depth_m:.2f}m, local_depth={guarded_depth_m:.2f}m.'
+        )
+        return u, v, guarded_depth_m
+
+    def _evaluate_goal_update(self, goal, yaw):
         if self.last_goal is None:
-            return True
+            return True, None
 
         dx = goal.pose.position.x - self.last_goal.pose.position.x
         dy = goal.pose.position.y - self.last_goal.pose.position.y
         distance_delta = math.hypot(dx, dy)
         last_yaw = self._quaternion_to_yaw(self.last_goal.pose.orientation)
         yaw_delta = abs(math.atan2(math.sin(yaw - last_yaw), math.cos(yaw - last_yaw)))
-        return distance_delta >= self.min_goal_update_distance or yaw_delta >= self.min_goal_update_angle
+
+        if self.max_goal_update_distance > 0.0 and distance_delta > self.max_goal_update_distance:
+            return (
+                False,
+                'Rejected target goal update because goal jump is too large: '
+                f'distance_delta={distance_delta:.2f}m > {self.max_goal_update_distance:.2f}m.'
+            )
+
+        if self.max_goal_update_angle > 0.0 and yaw_delta > self.max_goal_update_angle:
+            return (
+                False,
+                'Rejected target goal update because yaw jump is too large: '
+                f'yaw_delta={yaw_delta:.2f}rad > {self.max_goal_update_angle:.2f}rad.'
+            )
+
+        should_publish = (
+            distance_delta >= self.min_goal_update_distance
+            or yaw_delta >= self.min_goal_update_angle
+        )
+        return should_publish, None
 
     def _should_freeze_final_approach(self, observed_target_distance):
         if self.lock_goal_on_publish or self.final_approach_freeze_distance <= 0.0:
@@ -687,6 +811,28 @@ class TargetPixelToGoal(Node):
             'Entered final approach zone. Freezing goal updates and stopping tracking '
             f'because observed target distance is {observed_target_distance:.2f}m '
             f'(threshold {self.final_approach_freeze_distance:.2f}m).'
+        )
+        return True
+
+    def _should_freeze_near_current_goal(self, robot_x, robot_y):
+        if self.lock_goal_on_publish or self.goal_update_freeze_distance <= 0.0:
+            return False
+
+        if self.goal_locked or self.last_goal is None:
+            return False
+
+        dx = self.last_goal.pose.position.x - robot_x
+        dy = self.last_goal.pose.position.y - robot_y
+        distance_to_goal = math.hypot(dx, dy)
+        if distance_to_goal > self.goal_update_freeze_distance:
+            return False
+
+        self.goal_locked = True
+        self._publish_goal_locked(True)
+        self.get_logger().info(
+            'Entered near-goal update freeze zone. Freezing goal updates and stopping tracking '
+            f'because robot is {distance_to_goal:.2f}m from the current goal '
+            f'(threshold {self.goal_update_freeze_distance:.2f}m).'
         )
         return True
 

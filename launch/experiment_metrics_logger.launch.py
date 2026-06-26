@@ -14,12 +14,22 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'trial_timeout_s',
             default_value='30.0',
-            description='Timeout in seconds for one experiment trial.',
+            description='Stall timeout in seconds for one experiment trial. The logger only fails a trial after this long without progress.',
+        ),
+        DeclareLaunchArgument(
+            'max_trial_timeout_s',
+            default_value='120.0',
+            description='Hard upper bound in seconds for one experiment trial, even if progress continues.',
         ),
         DeclareLaunchArgument(
             'cv_runtime_topic',
             default_value='/experiment/cv_runtime',
             description='Topic where the CV module publishes the running average inference time for the current trial.',
+        ),
+        DeclareLaunchArgument(
+            'cv_model_topic',
+            default_value='/experiment/cv_model',
+            description='Latched topic where the CV module publishes the active model_mode for experiment logging.',
         ),
         DeclareLaunchArgument(
             'target_point_topic',
@@ -68,7 +78,9 @@ def generate_launch_description():
             parameters=[{
                 'output_csv': LaunchConfiguration('output_csv'),
                 'trial_timeout_s': LaunchConfiguration('trial_timeout_s'),
+                'max_trial_timeout_s': LaunchConfiguration('max_trial_timeout_s'),
                 'cv_runtime_topic': LaunchConfiguration('cv_runtime_topic'),
+                'cv_model_topic': LaunchConfiguration('cv_model_topic'),
                 'target_point_topic': LaunchConfiguration('target_point_topic'),
                 'fd_auto_topic': LaunchConfiguration('fd_auto_topic'),
                 'enable_fd_auto_measurement': LaunchConfiguration('enable_fd_auto_measurement'),

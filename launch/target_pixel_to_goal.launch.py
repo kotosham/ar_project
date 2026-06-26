@@ -108,9 +108,44 @@ def generate_launch_description():
                 description='Drop target-pixel updates that are older than this many seconds by the time they reach the Raspberry Pi.',
             ),
             DeclareLaunchArgument(
+                'embedded_depth_guard_radius_px',
+                default_value='12',
+                description='When target_pixel contains embedded depth, search this local depth radius for a significantly closer surface to avoid selecting background behind thin objects.',
+            ),
+            DeclareLaunchArgument(
+                'embedded_depth_guard_margin_m',
+                default_value='0.20',
+                description='Use local guarded depth only if it is at least this much closer than the embedded depth.',
+            ),
+            DeclareLaunchArgument(
+                'embedded_depth_guard_band_m',
+                default_value='0.05',
+                description='Depth band around the closest local sample used to reject isolated noisy pixels.',
+            ),
+            DeclareLaunchArgument(
+                'embedded_depth_guard_min_pixels',
+                default_value='3',
+                description='Minimum number of local samples in the guarded depth band required before replacing embedded depth.',
+            ),
+            DeclareLaunchArgument(
+                'max_goal_update_distance',
+                default_value='0.50',
+                description='Reject continuous goal updates that jump farther than this distance in map frame. Set <= 0 to disable.',
+            ),
+            DeclareLaunchArgument(
+                'max_goal_update_angle',
+                default_value='0.70',
+                description='Reject continuous goal updates whose yaw changes by more than this many radians. Set <= 0 to disable.',
+            ),
+            DeclareLaunchArgument(
                 'final_approach_freeze_distance',
-                default_value='0.60',
+                default_value='0.80',
                 description='In continuous mode, stop accepting goal updates when the observed target gets this close to the robot and finish the final approach blindly.',
+            ),
+            DeclareLaunchArgument(
+                'goal_update_freeze_distance',
+                default_value='0.60',
+                description='In continuous mode, stop accepting goal preemptions once the robot is this close to the currently published goal.',
             ),
             DeclareLaunchArgument(
                 'required_stable_detections',
@@ -148,7 +183,14 @@ def generate_launch_description():
                         'fd_lateral_limit_m': LaunchConfiguration('fd_lateral_limit_m'),
                         'lock_goal_on_publish': LaunchConfiguration('lock_goal_on_publish'),
                         'max_target_pixel_age_s': LaunchConfiguration('max_target_pixel_age_s'),
+                        'embedded_depth_guard_radius_px': LaunchConfiguration('embedded_depth_guard_radius_px'),
+                        'embedded_depth_guard_margin_m': LaunchConfiguration('embedded_depth_guard_margin_m'),
+                        'embedded_depth_guard_band_m': LaunchConfiguration('embedded_depth_guard_band_m'),
+                        'embedded_depth_guard_min_pixels': LaunchConfiguration('embedded_depth_guard_min_pixels'),
+                        'max_goal_update_distance': LaunchConfiguration('max_goal_update_distance'),
+                        'max_goal_update_angle': LaunchConfiguration('max_goal_update_angle'),
                         'final_approach_freeze_distance': LaunchConfiguration('final_approach_freeze_distance'),
+                        'goal_update_freeze_distance': LaunchConfiguration('goal_update_freeze_distance'),
                         'required_stable_detections': LaunchConfiguration('required_stable_detections'),
                         'stable_pixel_tolerance': LaunchConfiguration('stable_pixel_tolerance'),
                     }

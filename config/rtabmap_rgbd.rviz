@@ -8,12 +8,10 @@ Panels:
         - /TF1
         - /RobotModel1
         - /Map1
-        - /GlobalCloudMap1
-        - /CurrentRGB-DCloud1
         - /RGB Image1
         - /Depth Image1
       Splitter Ratio: 0.5
-    Tree Height: 144
+    Tree Height: 499
   - Class: rviz_common/Selection
     Name: Selection
   - Class: rviz_common/Tool Properties
@@ -59,56 +57,15 @@ Visualization Manager:
       Frame Timeout: 15
       Frames:
         All Enabled: true
-        base_footprint:
-          Value: true
-        base_link:
-          Value: true
-        camera_link:
-          Value: true
-        camera_link_optical:
-          Value: true
-        caster_wheel:
-          Value: true
-        chassis:
-          Value: true
-        depth_camera_link:
-          Value: true
-        depth_camera_link_optical:
-          Value: true
-        left_wheel:
-          Value: true
-        map:
-          Value: true
-        odom:
-          Value: true
-        right_wheel:
-          Value: true
       Marker Scale: 1
       Name: TF
       Show Arrows: false
       Show Axes: false
       Show Names: false
       Tree:
-        map:
-          odom:
-            base_link:
-              base_footprint:
-                {}
-              chassis:
-                camera_link:
-                  camera_link_optical:
-                    depth_camera_link_optical:
-                      {}
-                  depth_camera_link:
-                    {}
-                caster_wheel:
-                  {}
-              left_wheel:
-                {}
-              right_wheel:
-                {}
+        {}
       Update Interval: 0
-      Value: true
+      Value: false
     - Alpha: 1
       Class: rviz_default_plugins/RobotModel
       Collision Enabled: false
@@ -150,7 +107,7 @@ Visualization Manager:
           Show Trail: false
           Value: true
         chassis:
-          Alpha: 0.15
+          Alpha: 1
           Show Axes: false
           Show Trail: false
           Value: true
@@ -269,7 +226,6 @@ Visualization Manager:
       Min Intensity: 0
       Name: Global Cloud Map
       Position Transformer: XYZ
-      Queue Size: 10
       Selectable: true
       Size (Pixels): 3
       Size (m): 0.019999999552965164
@@ -303,7 +259,6 @@ Visualization Manager:
       Min Intensity: 0
       Name: Current RGB-D Cloud
       Position Transformer: XYZ
-      Queue Size: 10
       Selectable: true
       Size (Pixels): 4
       Size (m): 0.019999999552965164
@@ -318,7 +273,7 @@ Visualization Manager:
       Use rainbow: true
       Value: true
     - Class: rviz_default_plugins/Image
-      Enabled: true
+      Enabled: false
       Max Value: 1
       Median window: 5
       Min Value: 0
@@ -330,9 +285,9 @@ Visualization Manager:
         History Policy: Keep Last
         Reliability Policy: Best Effort
         Value: /camera/camera/color/image_raw
-      Value: true
+      Value: false
     - Class: rviz_default_plugins/Image
-      Enabled: true
+      Enabled: false
       Max Value: 10
       Median window: 5
       Min Value: 0
@@ -344,11 +299,11 @@ Visualization Manager:
         History Policy: Keep Last
         Reliability Policy: Best Effort
         Value: /camera/camera/aligned_depth_to_color/image_raw
-      Value: true
+      Value: false
   Enabled: true
   Global Options:
     Background Color: 48; 48; 48
-    Fixed Frame: odom
+    Fixed Frame: map
     Frame Rate: 30
   Name: root
   Tools:
@@ -383,41 +338,41 @@ Visualization Manager:
   Views:
     Current:
       Class: rviz_default_plugins/Orbit
-      Distance: 4.485721588134766
+      Distance: 6.121921539306641
       Enable Stereo Rendering:
         Stereo Eye Separation: 0.05999999865889549
         Stereo Focal Distance: 1
         Swap Stereo Eyes: false
         Value: false
       Focal Point:
-        X: 0.13700808584690094
-        Y: -0.0944662019610405
-        Z: 0.7844983339309692
+        X: 1.7774372100830078
+        Y: -0.26697680354118347
+        Z: 1.0014853477478027
       Focal Shape Fixed Size: true
       Focal Shape Size: 0.05000000074505806
       Invert Z Axis: false
       Name: Current View
       Near Clip Distance: 0.009999999776482582
-      Pitch: 0.36500072479248047
+      Pitch: 1.5149997472763062
       Target Frame: <Fixed Frame>
       Value: Orbit (rviz)
-      Yaw: 3.0268192291259766
+      Yaw: 3.1418204307556152
     Saved: ~
 Window Geometry:
   Depth Image:
     collapsed: false
   Displays:
-    collapsed: false
+    collapsed: true
   Height: 1011
-  Hide Left Dock: false
+  Hide Left Dock: true
   Hide Right Dock: false
-  QMainWindow State: 000000ff00000000fd00000001000000000000037600000399fc0200000007fb000000160044006500700074006800200049006d006100670065010000003d000000fc0000001600fffffffb0000001200520047004200200049006d006100670065010000013f000000f80000001600fffffffb000000100044006900730070006c006100790073010000023d0000011b000000c900fffffffb0000001200530065006c0065006300740069006f006e00000001f5000000690000005c00fffffffb0000001e0054006f006f006c002000500072006f00700065007200740069006500730000000231000000780000005c00fffffffb0000000a005600690065007700730000000280000000fa000000a400fffffffb0000000800540069006d0065010000035e000000780000003900ffffff000003c20000039900000004000000040000000800000008fc0000000100000002000000010000000a0054006f006f006c00730100000000ffffffff0000000000000000
+  QMainWindow State: 000000ff00000000fd00000001000000000000037600000395fc0200000007fb000000160044006500700074006800200049006d006100670065000000003f000000fb0000001700fffffffb0000001200520047004200200049006d006100670065000000003f000001590000001700fffffffb000000100044006900730070006c006100790073000000003f00000281000000cc00fffffffb0000001200530065006c0065006300740069006f006e00000001f5000000690000005d00fffffffb0000001e0054006f006f006c002000500072006f00700065007200740069006500730000000231000000780000005d00fffffffb0000000a005600690065007700730000000280000000fa000000a900fffffffb0000000800540069006d006500000002c60000010e0000003c00ffffff0000073e0000039500000004000000040000000800000008fc0000000100000002000000010000000a0054006f006f006c00730100000000ffffffff0000000000000000
   RGB Image:
     collapsed: false
   Selection:
     collapsed: false
   Time:
-    collapsed: false
+    collapsed: true
   Tool Properties:
     collapsed: false
   Views:

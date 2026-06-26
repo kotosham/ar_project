@@ -15,9 +15,13 @@ ekf_filter_node:
     world_frame: odom
 
     odom0: /diff_cont/odom
-    odom0_config: [true, true, false,
-                   false, false, true,
-                   true, false, false,
+    # Wheel odometry is generated entirely from the same encoder source, so
+    # avoid fusing both pose and twist from /diff_cont/odom into EKF.
+    # Follow robot_localization guidance for differential-drive robots:
+    # keep forward velocity, lateral zero-velocity constraint, and yaw rate.
+    odom0_config: [false, false, false,
+                   false, false, false,
+                   true, true, false,
                    false, false, true,
                    false, false, false]
     odom0_differential: false
