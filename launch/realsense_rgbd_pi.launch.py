@@ -14,6 +14,9 @@ def generate_launch_description():
     depth_profile = LaunchConfiguration('depth_module.depth_profile')
     enable_sync = LaunchConfiguration('enable_sync')
     align_depth = LaunchConfiguration('align_depth.enable')
+    spatial_filter = LaunchConfiguration('spatial_filter.enable')
+    temporal_filter = LaunchConfiguration('temporal_filter.enable')
+    hole_filling_filter = LaunchConfiguration('hole_filling_filter.enable')
     initial_reset = LaunchConfiguration('initial_reset')
     enable_gyro = LaunchConfiguration('enable_gyro')
     enable_accel = LaunchConfiguration('enable_accel')
@@ -51,6 +54,21 @@ def generate_launch_description():
             description='Align depth to color stream.',
         ),
         DeclareLaunchArgument(
+            'spatial_filter.enable',
+            default_value='false',
+            description='Enable RealSense spatial depth filtering for denser, less noisy RGB-D mapping.',
+        ),
+        DeclareLaunchArgument(
+            'temporal_filter.enable',
+            default_value='false',
+            description='Enable RealSense temporal depth filtering to reduce frame-to-frame depth noise.',
+        ),
+        DeclareLaunchArgument(
+            'hole_filling_filter.enable',
+            default_value='false',
+            description='Enable RealSense hole filling for more complete depth maps during SLAM.',
+        ),
+        DeclareLaunchArgument(
             'initial_reset',
             default_value='false',
             description='Reset the RealSense device once on startup. Disabled by default because it did not improve the D435i motion-module startup on the Raspberry Pi.',
@@ -85,6 +103,9 @@ def generate_launch_description():
                 'enable_depth': 'true',
                 'enable_sync': enable_sync,
                 'align_depth.enable': align_depth,
+                'spatial_filter.enable': spatial_filter,
+                'temporal_filter.enable': temporal_filter,
+                'hole_filling_filter.enable': hole_filling_filter,
                 'pointcloud.enable': 'false',
                 'initial_reset': initial_reset,
                 'enable_gyro': enable_gyro,

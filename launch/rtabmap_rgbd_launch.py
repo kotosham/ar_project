@@ -29,6 +29,9 @@ def generate_launch_description():
     topic_queue_size = LaunchConfiguration('topic_queue_size')
     sync_queue_size = LaunchConfiguration('sync_queue_size')
     publish_rgbd_cloud = LaunchConfiguration('publish_rgbd_cloud')
+    cloud_decimation = LaunchConfiguration('cloud_decimation')
+    cloud_max_depth = LaunchConfiguration('cloud_max_depth')
+    cloud_voxel_size = LaunchConfiguration('cloud_voxel_size')
     enable_visual_odometry = LaunchConfiguration('enable_visual_odometry')
     visual_odom_topic = LaunchConfiguration('visual_odom_topic')
     detection_rate = LaunchConfiguration('detection_rate')
@@ -147,7 +150,22 @@ def generate_launch_description():
     declare_publish_rgbd_cloud = DeclareLaunchArgument(
         'publish_rgbd_cloud',
         default_value='false',
-        description='Publish a debug point cloud from the RGB-D stream. Disabled by default on Pi to reduce load.',
+        description='Publish a lightweight depth-only point cloud for Nav2 local costmap. Disabled by default on Pi to reduce load.',
+    )
+    declare_cloud_decimation = DeclareLaunchArgument(
+        'cloud_decimation',
+        default_value='2',
+        description='Pixel decimation used when publish_rgbd_cloud is enabled.',
+    )
+    declare_cloud_max_depth = DeclareLaunchArgument(
+        'cloud_max_depth',
+        default_value='2.5',
+        description='Maximum depth in meters included in the local-costmap point cloud.',
+    )
+    declare_cloud_voxel_size = DeclareLaunchArgument(
+        'cloud_voxel_size',
+        default_value='0.03',
+        description='Voxel size in meters used to downsample the local-costmap point cloud. Set 0 to disable.',
     )
     declare_enable_visual_odometry = DeclareLaunchArgument(
         'enable_visual_odometry',
@@ -161,17 +179,17 @@ def generate_launch_description():
     )
     declare_detection_rate = DeclareLaunchArgument(
         'detection_rate',
-        default_value='2',
-        description='RTAB-Map detection rate in Hz. Lower default keeps the Pi responsive while validating RGB-D SLAM.',
+        default_value='5',
+        description='RTAB-Map detection rate in Hz for denser RGB-D map updates.',
     )
     declare_linear_update = DeclareLaunchArgument(
         'linear_update',
-        default_value='0.05',
+        default_value='0.0',
         description='Minimum linear motion in meters before RTAB-Map processes a new RGB-D update.',
     )
     declare_angular_update = DeclareLaunchArgument(
         'angular_update',
-        default_value='0.05',
+        default_value='0.0',
         description='Minimum angular motion in radians before RTAB-Map processes a new RGB-D update.',
     )
     declare_delete_db_on_start = DeclareLaunchArgument(
@@ -182,18 +200,18 @@ def generate_launch_description():
 
     depth_cloud_from_rgbd = Node(
         package='rtabmap_util',
-        executable='point_cloud_xyzrgb',
-        name='depth_cloud_from_rgbd',
+        executable='point_cloud_xyz',
+        name='depth_cloud_for_local_costmap',
         output='screen',
         condition=IfCondition(publish_rgbd_cloud),
         parameters=[{
-            'approx_sync': True,
-            'approx_sync_max_interval': approx_sync_max_interval,
+            'decimation': cloud_decimation,
+            'max_depth': cloud_max_depth,
+            'voxel_size': cloud_voxel_size,
         }],
         remappings=[
-            ('rgb/image', rgb_topic_input),
             ('depth/image', depth_topic_input),
-            ('rgb/camera_info', camera_info_topic),
+            ('depth/camera_info', camera_info_topic),
             ('cloud', point_cloud_topic),
         ],
     )
@@ -346,6 +364,9 @@ def generate_launch_description():
         declare_topic_queue_size,
         declare_sync_queue_size,
         declare_publish_rgbd_cloud,
+        declare_cloud_decimation,
+        declare_cloud_max_depth,
+        declare_cloud_voxel_size,
         declare_enable_visual_odometry,
         declare_visual_odom_topic,
         declare_detection_rate,
