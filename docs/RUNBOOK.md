@@ -148,17 +148,31 @@ Nav) · `DETECT_ALL`(детект всех объектов + классы, в n
 ## 4. ЖЕЛЕЗО (СНАЧАЛА следуйте §B safety в HIL_BRINGUP_CHECKLIST.md — колёса над землёй)
 
 ### 4a. Edge-машина (GPU)
+
+> **Единый канал камеры (анти-fan-out).** Через Wi-Fi идёт РОВНО ОДИН сжатый поток камеры
+> (JPEG color + compressedDepth + camera_info). `edge_bringup` поднимает relay, который
+> декомпрессирует его один раз и переиздаёт **edge-локально** на `/camera_edge/*`. ВСЕ
+> edge-ноды (SLAM, детектор, оркестратор) подписываются ТОЛЬКО на `/camera_edge/*`.
+> НИКОГДА не подписывайте edge-ноду напрямую на `/camera/camera/*` — каждая такая подписка
+> открывает свой собственный поток с Pi по Wi-Fi (raw color ≈ 921 КБ/кадр, raw depth
+> ≈ 614 КБ/кадр, 15 Гц) и Pi захлёбывается.
+
 ```bash
 sudo systemctl start rmw-zenoh-router.service          # deploy/transport (transport)
 sudo systemctl start chrony   # chrony-edge.conf master                (deploy/time_sync)
-ros2 launch ar_project rtabmap_rgbd_launch.py use_sim_time:=false       # SLAM -> /map + MapOdomCorrection
+# Camera relay (единственный Wi-Fi потребитель камеры) + RTAB-Map SLAM на /camera_edge/*:
+ros2 launch ar_project edge_bringup.launch.py                           # SLAM -> /map + MapOdomCorrection
+# Детектор (YOLOE, venv) — edge-локальные топики relay:
 ~/ot_venv/bin/python $(ros2 pkg prefix object_tracking)/lib/object_tracking/detect_target_server \
-  --ros-args -p use_sim_time:=false -p use_compressed_input:=true       # detector (YOLOE, venv)
+  --ros-args -p use_sim_time:=false \
+  -p image_topic:=/camera_edge/color/image_raw -p use_compressed_input:=false \
+  -p depth_topic:=/camera_edge/aligned_depth_to_color/image_raw
 # VLM-оркестратор (только для VLM-режима): creds из env, НИКОГДА не в параметрах/логах
 set -a; source object_tracking/planner_orchestrator/vlm.env; set +a
 ~/ot_venv/bin/python $(ros2 pkg prefix planner_orchestrator)/lib/planner_orchestrator/orchestrator_node \
   --ros-args -p use_sim_time:=false -p async_replan:=false -p detect_conf:=0.5 \
-  -p vlm_timeout_s:=30.0          # карта /map берётся edge-локально (RTAB-Map) -> в VLM 2-м изображением
+  -p vlm_timeout_s:=30.0 \
+  -p camera_image_topic:=/camera_edge/color/image_raw   # карта /map берётся edge-локально (RTAB-Map)
 ```
 Параметры VLM — см. таблицу в §3c. `detect_target_server` и `orchestrator_node` оба в `~/ot_venv`
 (torch для детектора; cv2/numpy для рендера карты у оркестратора).
@@ -204,6 +218,31 @@ ros2 topic pub --once /vlm_mission std_msgs/msg/String "{data: 'bus'}"
   epoch инкрементируется, старая миссия получает PREEMPTED, незавершённые skill-goal-ы отклоняются как zombie.
 
 ## 6. Мониторинг
+
+### 6a. Веб-дашборд миссии (основной инструмент)
+`edge_bringup.launch.py` (железо) и `vlm_sim_bringup.launch.py` (симуляция) автоматически
+поднимают **человекочитаемый веб-монитор**: откройте `http://<edge-host>:8088`
+(или запустите вручную: `ros2 run fleet_comms mission_dashboard`). На нём:
+
+- **Состояние компонентов робота** — по строке на каждый элемент (RealSense, EKF,
+  приводы EPOS4/CAN, `/scan`, Nav2, SLAM-коррекция, детектор, VLM-оркестратор,
+  executive FSM): что элемент принимает (возраст/частота сообщений) и что отказало
+  (OK / ВНИМАНИЕ / НЕТ ДАННЫХ / ОТКАЗ). Источник — `/robot_health`
+  (`robot_health_aggregator` на Pi, 1 Гц, входит в `hardware_bringup`).
+- **Что думает и делает VLM** — живая лента `/vlm/activity`: что VLM увидела
+  (детекции + уверенность + дистанция), что решила (действия + обоснование +
+  латентность), что реально произошло (выполнено/провал + длительность), память
+  (notes), деградация circuit-breaker.
+- **Что видит робот** — последний Set-of-Mark кадр (`/vlm/setofmark`) и карта,
+  отправленная VLM (`/vlm/map_view`).
+- **FSM executive** — латченый `/mission/status` (состояние/подзадача/прогресс/итог).
+- Heartbeat-строки — cpu / латентность / mission_epoch каждого продюсера; статусы
+  теперь **реальные**: оркестратор публикует DEGRADED при открытом circuit-breaker,
+  детектор — DOWN при упавшем бэкенде и DEGRADED без кадров камеры.
+
+### 6b. CLI (как раньше)
+- `ros2 topic echo /robot_health` — те же строки здоровья в сыром виде.
+- `ros2 topic echo /vlm/activity` — JSON-события VLM; `ros2 topic echo /mission/status` — FSM.
 - `ros2 topic echo /planner/notes` — компактные заметки VLM + token_estimate (вкл. результаты DETECT_ALL).
 - `ros2 topic echo /frontiers` — список frontier-ов + закоммиченный id (для FLAT).
 - `ros2 action list` / `ros2 node list` — подтвердить, что серверы подняты.
@@ -225,6 +264,10 @@ ros2 topic pub --once /vlm_mission std_msgs/msg/String "{data: 'bus'}"
 ложный `reached` по устаревшему пикселю (возвращает STALE_DETECTION / LOST_TARGET).
 
 ## 8. Устранение неполадок
+- **Relay на edge не получает кадры (`/camera_edge/*` пустые):** на Pi должны стоять плагины
+  сжатия image_transport: `sudo apt install ros-jazzy-image-transport-plugins` (даёт
+  `/camera/.../image_raw/compressed` и `.../compressedDepth`). Проверка на Pi:
+  `ros2 topic list | grep compressed`. Сжатие ленивое — топик появляется под подписчиком.
 - **Spawn зацикливается на "Requesting list of world names" / нет `/odom`:** завис старый сервер `gz sim` —
   `pkill -9 -f 'gz sim'; pkill -9 -f ruby` и перезапустите.
 - **Робот не двигается в ограниченном мире:** ещё нет frontier-ов — выполните засев вращением (3a, T2),

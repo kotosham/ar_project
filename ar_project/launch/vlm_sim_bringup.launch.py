@@ -23,8 +23,10 @@ from launch.actions import (
     OpaqueFunction,
     TimerAction,
 )
+from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
+from launch_ros.actions import Node
 
 
 def _bool_value(value):
@@ -163,6 +165,12 @@ def generate_launch_description():
         DeclareLaunchArgument('detector_conf_default', default_value='0.25'),
         DeclareLaunchArgument('detector_min_mask_area', default_value='200'),
         DeclareLaunchArgument('detector_use_depth', default_value='true'),
+        DeclareLaunchArgument(
+            'start_monitor',
+            default_value='true',
+            description='Start robot_health_aggregator + the mission dashboard '
+                        '(http://localhost:8088) alongside the sim stack.',
+        ),
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource(os.path.join(launch_dir, 'flat_sim_bringup.launch.py')),
             launch_arguments={
@@ -172,6 +180,24 @@ def generate_launch_description():
                 'gui': LaunchConfiguration('gui'),
                 'rviz': LaunchConfiguration('rviz'),
             }.items(),
+        ),
+        # Monitoring: per-component health rollup + the human-readable web
+        # dashboard. In sim everything is one host, so both just run here.
+        Node(
+            package='search_coordinator',
+            executable='robot_health_aggregator',
+            name='robot_health_aggregator',
+            parameters=[{'use_sim_time': LaunchConfiguration('use_sim_time')}],
+            output='screen',
+            condition=IfCondition(LaunchConfiguration('start_monitor')),
+        ),
+        Node(
+            package='fleet_comms',
+            executable='mission_dashboard',
+            name='mission_dashboard',
+            parameters=[{'use_sim_time': LaunchConfiguration('use_sim_time')}],
+            output='screen',
+            condition=IfCondition(LaunchConfiguration('start_monitor')),
         ),
         OpaqueFunction(function=_edge_processes),
     ])

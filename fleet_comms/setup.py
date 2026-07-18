@@ -17,5 +17,9 @@ setup(
     description='Shared cross-link QoS profiles + Heartbeat producer/monitor (ROADMAP Phase 1.3).',
     license='Apache-2.0',
     tests_require=['pytest'],
-    entry_points={'console_scripts': []},
+    entry_points={
+        'console_scripts': [
+            'mission_dashboard = fleet_comms.mission_dashboard:main',
+        ],
+    },
 )

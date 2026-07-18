@@ -151,15 +151,19 @@ def generate_launch_description():
     # Local /scan from the depth image (Phase 1.4) — generated on the Pi, so no
     # PointCloud2/raw depth crosses Wi-Fi. Feeds the costmap obstacle layer and
     # the Collision Monitor (Phase 0.6).
-    # NOTE: output_frame must match the actual RealSense depth optical frame on
-    # real hardware (verify in Phase 6 hardware bring-up); 'camera_link_optical'
-    # matches the URDF/sim frame.
+    # NOTE: output_frame must be an X-FORWARD body frame (camera_link), NEVER an
+    # optical frame. depthimage_to_laserscan only stamps header.frame_id without
+    # rotating the data; a LaserScan's angle=0 ray points along the frame's +X.
+    # With 'camera_link_optical' (X-right/Y-down/Z-forward) the whole scan is
+    # rotated ~90°, so forward obstacles were marked to the robot's RIGHT in the
+    # costmap (phantom obstacle area). 'camera_link' exists in both the URDF and
+    # the real RealSense TF tree, and is X-forward in both.
     depthimage_to_laserscan = Node(
         package='depthimage_to_laserscan',
         executable='depthimage_to_laserscan_node',
         name='depthimage_to_laserscan',
         parameters=[{
-            'output_frame': 'camera_link_optical',
+            'output_frame': 'camera_link',
             'range_min': 0.1,
             'range_max': 8.0,
             'scan_height': 10,
@@ -181,6 +185,17 @@ def generate_launch_description():
         remappings=[('/cmd_vel_out', '/cmd_vel_out')],
         output='screen',
         condition=IfCondition(use_twist_mux),
+    )
+
+    # Per-component health rollup -> /robot_health (DiagnosticArray, 1 Hz).
+    # Consumed by the fleet_comms mission_dashboard on the edge; the only
+    # monitoring stream that crosses Wi-Fi (DATA_CONTRACTS L8, ~KB/s).
+    robot_health_aggregator = Node(
+        package='search_coordinator',
+        executable='robot_health_aggregator',
+        name='robot_health_aggregator',
+        parameters=[{'use_sim_time': False}],
+        output='screen',
     )
 
     # Nav2 Collision Monitor (Phase 0.6): reactive stop/slowdown on the final
@@ -362,6 +377,7 @@ def generate_launch_description():
         cmd_vel_watchdog,
         depthimage_to_laserscan,
         twist_mux,
+        robot_health_aggregator,
         collision_monitor,
         twist_to_stamped_from_mux,
         twist_to_stamped_direct,

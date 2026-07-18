@@ -10,6 +10,7 @@ is_current(my_epoch); the superseded mission cancels its in-flight skill and
 finalizes PREEMPTED, the skill servers reject the now-zombie epoch, and the new
 mission re-arms at SEARCH. The pure transition logic lives in executive_fsm.
 """
+import json
 import time
 import uuid
 
@@ -18,12 +19,13 @@ from rclpy.action import ActionClient, ActionServer, CancelResponse, GoalRespons
 from rclpy.callback_groups import ReentrantCallbackGroup
 
 from geometry_msgs.msg import PointStamped
+from std_msgs.msg import String
 
 from object_tracking_msgs.action import SeekObject
 
 from ar_project_msgs.action import ApproachDetection, ExploreFrontier, Stop
 
-from fleet_comms.qos import detection_stream_nodeadline
+from fleet_comms.qos import control_cmd_latched, detection_stream_nodeadline
 
 from search_coordinator import executive_fsm as fsm
 from search_coordinator.executive_fsm import EVENT, STATE
@@ -65,6 +67,13 @@ class SeekObjectServer:
             goal_callback=lambda g: GoalResponse.ACCEPT,
             cancel_callback=lambda gh: CancelResponse.ACCEPT,
             callback_group=self._srv_group)
+
+        # Latched side-channel broadcast of the FSM state. Action feedback only
+        # reaches the goal OWNER; this lets any monitor (mission dashboard,
+        # ros2 topic echo) see state/subtask/progress live and after a late join.
+        self._status_pub = node.create_publisher(String, '/mission/status',
+                                                 control_cmd_latched())
+        self._broadcast_status(STATE.IDLE, epoch=0, instruction='')
 
     # -- pixel tracking -------------------------------------------------------
 
@@ -129,13 +138,29 @@ class SeekObjectServer:
             time.sleep(0.1)
         return ('result', result_future.result().result)
 
-    def _publish_feedback(self, parent, my_epoch, state, subtask=''):
+    def _publish_feedback(self, parent, my_epoch, state, subtask='', instruction=''):
         fb = SeekObject.Feedback()
         fb.state = state
         fb.active_subtask = subtask
         fb.progress = fsm.progress_for(state)
         fb.mission_epoch = my_epoch
         parent.publish_feedback(fb)
+        self._broadcast_status(state, epoch=my_epoch, subtask=subtask,
+                               instruction=instruction)
+
+    def _broadcast_status(self, state, epoch=0, subtask='', instruction='', outcome=''):
+        """Publish the latched human-readable /mission/status JSON snapshot."""
+        msg = String()
+        msg.data = json.dumps({
+            'state': state,
+            'active_subtask': subtask,
+            'progress': fsm.progress_for(state),
+            'mission_epoch': int(epoch),
+            'instruction': instruction,
+            'outcome': outcome,
+            'stamp': self.node.get_clock().now().nanoseconds / 1e9,
+        }, ensure_ascii=False)
+        self._status_pub.publish(msg)
 
     # -- state handlers -------------------------------------------------------
 
@@ -214,6 +239,8 @@ class SeekObjectServer:
                 self.ms.finish()
                 result.outcome = SeekObject.Result.PREEMPTED
                 result.summary = 'cancelled'
+                self._broadcast_status(STATE.STOP, epoch=my_epoch,
+                                       instruction=goal.instruction, outcome='cancelled')
                 parent.canceled()
                 return result
             if not self.ms.is_current(my_epoch):
@@ -228,7 +255,8 @@ class SeekObjectServer:
             # SEARCH" from "actively driving" -- active_subtask was always '' before,
             # making a live run impossible to diagnose.
             self._publish_feedback(parent, my_epoch, state,
-                                   fsm.select_subgoal(state) or '')
+                                   fsm.select_subgoal(state) or '',
+                                   instruction=goal.instruction)
 
             if state == STATE.SEARCH:
                 self._search_start_ns = self.node.get_clock().now().nanoseconds
@@ -257,7 +285,7 @@ class SeekObjectServer:
                 break
 
         self.ms.finish()
-        self._publish_feedback(parent, my_epoch, state)
+        self._publish_feedback(parent, my_epoch, state, instruction=goal.instruction)
         if state == STATE.DONE:
             result.outcome = SeekObject.Result.SUCCEEDED
             result.summary = 'reached target'
@@ -266,4 +294,6 @@ class SeekObjectServer:
             result.outcome = SeekObject.Result.ABORTED
             result.summary = 'frontiers exhausted' if state == STATE.FAILED else 'ended'
             parent.abort()
+        self._broadcast_status(state, epoch=my_epoch, instruction=goal.instruction,
+                               outcome=result.summary)
         return result

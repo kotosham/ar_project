@@ -72,6 +72,7 @@ install(
 install(
   PROGRAMS
     scripts/calibration_motion.py
+    scripts/camera_info_relay.py
     scripts/cmd_vel_watchdog.py
     scripts/experiment_metrics_logger.py
     scripts/home_pose_manager.py

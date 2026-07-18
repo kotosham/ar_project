@@ -174,12 +174,17 @@ def generate_launch_description():
     # Local /scan from the depth image (Phase 1.4). Generated on-robot; never
     # stream PointCloud2/raw depth over Wi-Fi. Feeds the costmap obstacle layer
     # and the Collision Monitor (Phase 0.6).
+    # output_frame must be an X-FORWARD body frame (camera_link), NEVER an
+    # optical frame: the node only stamps frame_id without rotating, and a
+    # LaserScan's angle=0 ray points along the frame's +X. The old
+    # 'camera_link_optical' value rotated the scan ~90°, marking forward
+    # obstacles to the robot's RIGHT in the costmap.
     depthimage_to_laserscan = Node(
         package='depthimage_to_laserscan',
         executable='depthimage_to_laserscan_node',
         name='depthimage_to_laserscan',
         parameters=[{
-            'output_frame': 'camera_link_optical',
+            'output_frame': 'camera_link',
             'range_min': 0.1,
             'range_max': 8.0,
             'scan_height': 10,
