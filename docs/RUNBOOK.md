@@ -38,6 +38,164 @@
 
 ---
 
+## 2.1. Быстрый запуск VLM по терминалам
+
+Этот раздел — короткая карточка запуска именно **VLM-режима**. Подробные пояснения, параметры и
+диагностика остаются ниже в разделах 3–8.
+
+### Симуляция VLM на одной машине
+
+**T1 — весь симуляционный стек + detector + VLM-orchestrator**
+
+```bash
+cd ~/ros2_ws
+source /opt/ros/jazzy/setup.bash
+source ~/ros2_ws/install/setup.bash
+export GZ_IP=127.0.0.1
+set -a; source ~/ros2_ws/src/object_tracking/planner_orchestrator/vlm.env; set +a
+
+ros2 launch ar_project vlm_sim_bringup.launch.py \
+  start_edge:=true \
+  venv_python:=/home/user/.venvs/ros-jazzy-ml/bin/python
+```
+
+Что поднимается: Gazebo, RViz, SLAM, Nav2, `search_coordinator`, dashboard,
+`detect_target_server` и `planner_orchestrator`.
+
+**T2 — отправка VLM-миссии**
+
+```bash
+cd ~/ros2_ws
+source /opt/ros/jazzy/setup.bash
+source ~/ros2_ws/install/setup.bash
+
+ros2 topic pub --once /vlm_mission std_msgs/msg/String "{data: 'bus'}"
+```
+
+Dashboard: `http://localhost:8088`.
+
+### Реальное железо: Pi + edge-ноутбук
+
+#### Raspberry Pi
+
+**Pi T1 — железо, моторы, safety, `/scan`**
+
+```bash
+cd ~/ros2_ws
+source /opt/ros/jazzy/setup.bash
+source ~/ros2_ws/install/setup.bash
+
+ros2 launch ar_project hardware_bringup.launch.py
+```
+
+**Pi T2 — RealSense RGB-D + IMU**
+
+```bash
+cd ~/ros2_ws
+source /opt/ros/jazzy/setup.bash
+source ~/ros2_ws/install/setup.bash
+
+ros2 launch ar_project realsense_rgbd_pi.launch.py
+```
+
+**Pi T3 — Nav2**
+
+```bash
+cd ~/ros2_ws
+source /opt/ros/jazzy/setup.bash
+source ~/ros2_ws/install/setup.bash
+
+ros2 launch ar_project navigation_launch.py \
+  use_sim_time:=false \
+  odom_topic:=/odometry/filtered
+```
+
+**Pi T4 — map->odom correction relay**
+
+```bash
+cd ~/ros2_ws
+source /opt/ros/jazzy/setup.bash
+source ~/ros2_ws/install/setup.bash
+
+ros2 run search_coordinator map_odom_relay --ros-args \
+  -p use_sim_time:=false
+```
+
+**Pi T5 — executive / skill servers для VLM**
+
+```bash
+cd ~/ros2_ws
+source /opt/ros/jazzy/setup.bash
+source ~/ros2_ws/install/setup.bash
+
+ros2 run search_coordinator coordinator_node --ros-args \
+  -p use_sim_time:=false
+```
+
+#### Edge-ноутбук
+
+**Edge T1 — camera relay + RTAB-Map + dashboard**
+
+```bash
+cd ~/ros2_ws
+source /opt/ros/jazzy/setup.bash
+source ~/ros2_ws/install/setup.bash
+
+ros2 launch ar_project edge_bringup.launch.py
+```
+
+Что поднимается: единственный Wi-Fi consumer камеры, локальные `/camera_edge/*`, RTAB-Map и
+dashboard. Этот терминал **не** запускает detector и VLM-orchestrator.
+
+**Edge T2 — detector / Set-of-Mark**
+
+```bash
+cd ~/ros2_ws
+source /opt/ros/jazzy/setup.bash
+source ~/ros2_ws/install/setup.bash
+
+/home/user/.venvs/ros-jazzy-ml/bin/python -m object_tracking.detect_target_server \
+  --ros-args \
+  -p use_sim_time:=false \
+  -p image_topic:=/camera_edge/color/image_raw \
+  -p use_compressed_input:=false \
+  -p depth_topic:=/camera_edge/aligned_depth_to_color/image_raw
+```
+
+**Edge T3 — VLM-orchestrator**
+
+```bash
+cd ~/ros2_ws
+source /opt/ros/jazzy/setup.bash
+source ~/ros2_ws/install/setup.bash
+set -a; source ~/ros2_ws/src/object_tracking/planner_orchestrator/vlm.env; set +a
+
+/home/user/.venvs/ros-jazzy-ml/bin/python -m planner_orchestrator.orchestrator_node \
+  --ros-args \
+  -p use_sim_time:=false \
+  -p async_replan:=false \
+  -p detect_conf:=0.5 \
+  -p vlm_timeout_s:=30.0 \
+  -p camera_image_topic:=/camera_edge/color/image_raw
+```
+
+**Edge T4 — отправка VLM-миссии**
+
+```bash
+cd ~/ros2_ws
+source /opt/ros/jazzy/setup.bash
+source ~/ros2_ws/install/setup.bash
+
+ros2 topic pub --once /vlm_mission std_msgs/msg/String "{data: 'bus'}"
+```
+
+Dashboard: `http://localhost:8088` на edge-ноутбуке.
+
+Перед автономным запуском на железе сначала пройти safety-проверки из `HIL_BRINGUP_CHECKLIST.md`,
+раздел B: колёса над землёй, quick-stop, watchdog, collision monitor.
+
+---
+
 ## 3. СИМУЛЯЦИЯ (полностью протестированный путь)
 
 ### 3a. FLAT-миссия (без VLM) — одна команда
