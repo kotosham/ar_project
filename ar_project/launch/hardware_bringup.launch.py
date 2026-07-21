@@ -32,6 +32,7 @@ def generate_launch_description():
 
     can_interface_name = LaunchConfiguration('can_interface_name')
     use_twist_mux = LaunchConfiguration('use_twist_mux')
+    use_collision_monitor = LaunchConfiguration('use_collision_monitor')
     start_controllers = LaunchConfiguration('start_controllers')
     start_joint_state_broadcaster = LaunchConfiguration('start_joint_state_broadcaster')
     enable_imu_ekf = LaunchConfiguration('enable_imu_ekf')
@@ -212,10 +213,14 @@ def generate_launch_description():
             'cmd_vel_in_topic': '/cmd_vel_out',
             'cmd_vel_out_topic': '/cmd_vel_collision_safe',
         }.items(),
-        condition=IfCondition(use_twist_mux),
+        condition=IfCondition(
+            PythonExpression(
+                ["'", use_twist_mux, "' == 'true' and '", use_collision_monitor, "' == 'true'"]
+            )
+        ),
     )
 
-    twist_to_stamped_from_mux = Node(
+    twist_to_stamped_from_collision_monitor = Node(
         package='ar_project',
         executable='twist_to_twist_stamped.py',
         parameters=[
@@ -225,7 +230,28 @@ def generate_launch_description():
             }
         ],
         output='screen',
-        condition=IfCondition(use_twist_mux),
+        condition=IfCondition(
+            PythonExpression(
+                ["'", use_twist_mux, "' == 'true' and '", use_collision_monitor, "' == 'true'"]
+            )
+        ),
+    )
+
+    twist_to_stamped_from_mux = Node(
+        package='ar_project',
+        executable='twist_to_twist_stamped.py',
+        parameters=[
+            {
+                'input_topic': '/cmd_vel_out',
+                'output_topic': '/diff_cont/cmd_vel',
+            }
+        ],
+        output='screen',
+        condition=IfCondition(
+            PythonExpression(
+                ["'", use_twist_mux, "' == 'true' and '", use_collision_monitor, "' != 'true'"]
+            )
+        ),
     )
 
     twist_to_stamped_direct = Node(
@@ -320,6 +346,15 @@ def generate_launch_description():
             description='Start twist_mux so /cmd_vel, /cmd_vel_tracker and /cmd_vel_joy are merged.',
         ),
         DeclareLaunchArgument(
+            'use_collision_monitor',
+            default_value='false',
+            description=(
+                'Insert Nav2 collision_monitor after twist_mux. Disabled by default on '
+                'hardware because stale/future-stamped /scan can otherwise block all '
+                'manual and autonomous motion.'
+            ),
+        ),
+        DeclareLaunchArgument(
             'start_controllers',
             default_value='true',
             description='Automatically spawn joint_state_broadcaster and diff_drive_controller.',
@@ -379,6 +414,7 @@ def generate_launch_description():
         twist_mux,
         robot_health_aggregator,
         collision_monitor,
+        twist_to_stamped_from_collision_monitor,
         twist_to_stamped_from_mux,
         twist_to_stamped_direct,
         joint_state_broadcaster_spawner,

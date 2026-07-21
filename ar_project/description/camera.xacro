@@ -23,4 +23,15 @@
     </joint>
 
     <link name="camera_link_optical"></link>
+
+    <!-- RealSense image headers use this frame; keep it as an optical-frame
+         alias so edge RTAB-Map and Pi ApproachDetection can transform images
+         without depending on the camera driver to publish extra static TFs. -->
+    <joint name="camera_color_optical_alias_joint" type="fixed">
+        <parent link="camera_link_optical"/>
+        <child link="camera_color_optical_frame"/>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+    </joint>
+
+    <link name="camera_color_optical_frame"></link>
 </robot>

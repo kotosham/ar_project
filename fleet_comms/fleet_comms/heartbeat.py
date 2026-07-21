@@ -41,6 +41,14 @@ def _cpu_load() -> float:
         return 0.0
 
 
+def _is_unsupported_qos_event(exc: Exception) -> bool:
+    name = type(exc).__name__
+    text = str(exc).lower()
+    return name == 'UnsupportedEventTypeError' or (
+        'unsupported' in text and 'event' in text
+    )
+
+
 class HeartbeatPublisher:
     """Periodically publishes a Heartbeat for one producer node.
 
@@ -119,13 +127,21 @@ class HeartbeatMonitor:
         self._nodes = {}
         self._mission_epoch = int(mission_epoch) & UINT32_MASK
         self._ignored_stale_epoch = 0
+        qos = liveliness_status(expected_period_s)
         callbacks = SubscriptionEventCallbacks(
             deadline=self._on_deadline_missed,
             liveliness=self._on_liveliness_changed,
         )
-        self._sub = node.create_subscription(
-            Heartbeat, topic, self._on_msg, liveliness_status(expected_period_s),
-            event_callbacks=callbacks)
+        try:
+            self._sub = node.create_subscription(
+                Heartbeat, topic, self._on_msg, qos, event_callbacks=callbacks)
+        except Exception as exc:
+            if not _is_unsupported_qos_event(exc):
+                raise
+            node.get_logger().warn(
+                'heartbeat QoS event callbacks are not supported by this RMW; '
+                'falling back to timer-based stale detection only')
+            self._sub = node.create_subscription(Heartbeat, topic, self._on_msg, qos)
         self._timer = node.create_timer(expected_period_s, self._check_stale)
 
     def set_mission_epoch(self, epoch: int) -> None:

@@ -4,8 +4,9 @@
 RTAB-Map already computes the optimized map->odom transform and exposes it in
 rtabmap_msgs/MapGraph.map_to_odom. In the two-host hardware architecture the
 edge must not stream map->odom as TF directly over Wi-Fi. Instead, this node
-wraps each MapGraph transform into ar_project_msgs/MapOdomCorrection; the Pi
-side map_odom_relay gates it and rebroadcasts a fresh local TF.
+caches the latest MapGraph transform and republishes it as a low-rate
+ar_project_msgs/MapOdomCorrection heartbeat; the Pi side map_odom_relay gates it
+and rebroadcasts a fresh local TF.
 """
 
 import math
@@ -20,20 +21,26 @@ from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from rtabmap_msgs.msg import Info, MapGraph
 
 
-def _rtabmap_input_qos():
-    """Compatible with RTAB-Map's ordinary telemetry topics.
+def _rtabmap_map_graph_qos():
+    """Compatible with RTAB-Map's latched /mapGraph publisher.
 
     Do not request a deadline here: RTAB-Map does not promise one, and a stricter
-    requested deadline can make DDS refuse the connection.
+    requested deadline can make DDS refuse the connection. RTAB-Map publishes
+    /mapGraph as TRANSIENT_LOCAL, so request the same durability to receive the
+    last graph even when this node starts after RTAB-Map.
     """
+    q = QoSProfile(depth=1)
+    q.reliability = ReliabilityPolicy.RELIABLE
+    q.durability = DurabilityPolicy.TRANSIENT_LOCAL
+    return q
+
+
+def _rtabmap_info_qos():
+    """Compatible with RTAB-Map's ordinary volatile telemetry topics."""
     q = QoSProfile(depth=10)
     q.reliability = ReliabilityPolicy.RELIABLE
     q.durability = DurabilityPolicy.VOLATILE
     return q
-
-
-def _stamp_is_zero(stamp):
-    return int(stamp.sec) == 0 and int(stamp.nanosec) == 0
 
 
 def _yaw_from_quat(q):
@@ -75,6 +82,7 @@ class RtabmapMapOdomCorrectionPublisher(Node):
         self.declare_parameter('mark_jump_as_relocalized', True)
         self.declare_parameter('relocalized_jump_m', 0.75)
         self.declare_parameter('relocalized_jump_rad', 0.75)
+        self.declare_parameter('publish_rate_hz', 2.0)
 
         g = lambda name: self.get_parameter(name).value
         self.map_graph_topic = str(g('map_graph_topic'))
@@ -91,24 +99,30 @@ class RtabmapMapOdomCorrectionPublisher(Node):
         self.mark_jump_as_relocalized = bool(g('mark_jump_as_relocalized'))
         self.relocalized_jump_m = float(g('relocalized_jump_m'))
         self.relocalized_jump_rad = float(g('relocalized_jump_rad'))
+        self.publish_rate_hz = float(g('publish_rate_hz'))
 
         self._seq = 0
         self._last_transform = None
+        self._latest_transform = None
         self._last_info_relocalization_mono = 0.0
+        self._pending_relocalized = False
         self._published_once = False
 
         self._pub = self.create_publisher(
             MapOdomCorrection, self.correction_topic, correction_lowrate())
         self.create_subscription(MapGraph, self.map_graph_topic,
-                                 self._on_map_graph, _rtabmap_input_qos())
+                                 self._on_map_graph, _rtabmap_map_graph_qos())
         if self.use_info_relocalized:
-            self.create_subscription(Info, self.info_topic, self._on_info, 10)
+            self.create_subscription(Info, self.info_topic, self._on_info,
+                                     _rtabmap_info_qos())
+        self.create_timer(
+            1.0 / max(0.1, self.publish_rate_hz), self._publish_latest)
 
         self.get_logger().info(
             'RTAB-Map correction publisher ready: %s.map_to_odom -> %s '
-            '(%s->%s, info_reloc=%s, jump_reloc=%s)'
+            '(%s->%s, %.1f Hz, info_reloc=%s, jump_reloc=%s)'
             % (self.map_graph_topic, self.correction_topic,
-               self.parent_frame, self.child_frame,
+               self.parent_frame, self.child_frame, self.publish_rate_hz,
                self.use_info_relocalized, self.mark_jump_as_relocalized))
 
     def _on_info(self, msg):
@@ -135,10 +149,22 @@ class RtabmapMapOdomCorrectionPublisher(Node):
         return dist > self.relocalized_jump_m or dyaw > self.relocalized_jump_rad
 
     def _on_map_graph(self, msg):
-        stamp = msg.header.stamp
-        if _stamp_is_zero(stamp):
-            stamp = self.get_clock().now().to_msg()
+        relocalized = (
+            self._info_relocalized_is_recent()
+            or self._jump_looks_like_relocalization(msg.map_to_odom)
+        )
+        self._pending_relocalized = self._pending_relocalized or relocalized
+        _copy_transform(msg.map_to_odom, self._ensure_latest_transform())
+        _copy_transform(msg.map_to_odom, self._ensure_last_transform())
+        self._publish_latest()
 
+    def _publish_latest(self):
+        if self._latest_transform is None:
+            return
+
+        # Fresh stamps keep the Pi relay and dashboard alive even when RTAB-Map's
+        # latched /mapGraph does not change for a long stationary interval.
+        stamp = self.get_clock().now().to_msg()
         out = MapOdomCorrection()
         out.header.stamp = stamp
         out.header.frame_id = self.parent_frame
@@ -146,7 +172,7 @@ class RtabmapMapOdomCorrectionPublisher(Node):
         out.map_to_odom.header.stamp = stamp
         out.map_to_odom.header.frame_id = self.parent_frame
         out.map_to_odom.child_frame_id = self.child_frame
-        _copy_transform(msg.map_to_odom, out.map_to_odom.transform)
+        _copy_transform(self._latest_transform, out.map_to_odom.transform)
 
         cov = [0.0] * 36
         cov[0] = self.covariance_x
@@ -156,13 +182,10 @@ class RtabmapMapOdomCorrectionPublisher(Node):
         out.fitness = self.fitness_default
         self._seq = (self._seq + 1) & 0xFFFFFFFF
         out.seq = self._seq
-        out.relocalized = (
-            self._info_relocalized_is_recent()
-            or self._jump_looks_like_relocalization(msg.map_to_odom)
-        )
+        out.relocalized = self._pending_relocalized
+        self._pending_relocalized = False
 
         self._pub.publish(out)
-        _copy_transform(msg.map_to_odom, self._ensure_last_transform())
 
         if not self._published_once:
             self._published_once = True
@@ -171,6 +194,12 @@ class RtabmapMapOdomCorrectionPublisher(Node):
                 % (out.seq, out.header.stamp.sec, out.header.stamp.nanosec))
         elif out.relocalized:
             self.get_logger().info('Published relocalized map->odom correction seq=%d' % out.seq)
+
+    def _ensure_latest_transform(self):
+        if self._latest_transform is None:
+            from geometry_msgs.msg import Transform
+            self._latest_transform = Transform()
+        return self._latest_transform
 
     def _ensure_last_transform(self):
         if self._last_transform is None:

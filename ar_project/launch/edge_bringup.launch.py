@@ -50,6 +50,9 @@ def generate_launch_description():
     database_path = LaunchConfiguration('database_path')
     delete_db_on_start = LaunchConfiguration('delete_db_on_start')
     detection_rate = LaunchConfiguration('detection_rate')
+    approx_sync_max_interval = LaunchConfiguration('approx_sync_max_interval')
+    topic_queue_size = LaunchConfiguration('topic_queue_size')
+    sync_queue_size = LaunchConfiguration('sync_queue_size')
     publish_tf_map = LaunchConfiguration('publish_tf_map')
     start_map_odom_correction = LaunchConfiguration('start_map_odom_correction')
 
@@ -76,8 +79,23 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             'detection_rate',
-            default_value='2',
-            description='RTAB-Map detection rate in Hz.',
+            default_value='1',
+            description='RTAB-Map detection rate in Hz. 1 Hz keeps 6 FPS hardware RGB-D stable over Wi-Fi.',
+        ),
+        DeclareLaunchArgument(
+            'approx_sync_max_interval',
+            default_value='0.5',
+            description='RGB-D sync window for the edge relay. 0.5 s is needed for RealSense 6 FPS plus Wi-Fi/republish jitter.',
+        ),
+        DeclareLaunchArgument(
+            'topic_queue_size',
+            default_value='120',
+            description='RTAB-Map input queue size for low-FPS hardware RGB-D streams.',
+        ),
+        DeclareLaunchArgument(
+            'sync_queue_size',
+            default_value='120',
+            description='RTAB-Map synchronizer queue size for low-FPS hardware RGB-D streams.',
         ),
         DeclareLaunchArgument(
             'publish_tf_map',
@@ -116,6 +134,9 @@ def generate_launch_description():
                 'database_path': database_path,
                 'delete_db_on_start': delete_db_on_start,
                 'detection_rate': detection_rate,
+                'approx_sync_max_interval': approx_sync_max_interval,
+                'topic_queue_size': topic_queue_size,
+                'sync_queue_size': sync_queue_size,
                 'publish_tf_map': publish_tf_map,
                 'rgb_topic': '/camera_edge/color/image_raw',
                 'depth_topic': '/camera_edge/aligned_depth_to_color/image_raw',

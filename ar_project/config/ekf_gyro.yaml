@@ -3,7 +3,9 @@ ekf_filter_node:
     frequency: 20.0
     sensor_timeout: 0.2
     two_d_mode: true
-    transform_time_offset: 0.0
+    # Publish odom->base_link slightly ahead of the filter time so real sensor
+    # messages do not require TF extrapolation into the future.
+    transform_time_offset: 0.1
     transform_timeout: 0.1
     publish_tf: true
     publish_acceleration: false

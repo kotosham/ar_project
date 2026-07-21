@@ -78,16 +78,26 @@ Dashboard: `http://localhost:8088`.
 
 #### Raspberry Pi
 
-**Pi T1 — железо, моторы, safety, `/scan`**
+**Pi T1 — железо, моторы, watchdog/twist mux, `/scan`**
 
 ```bash
 cd ~/ros2_ws
 source /opt/ros/jazzy/setup.bash
 source ~/ros2_ws/install/setup.bash
+unset ROS_LOCALHOST_ONLY ROS_STATIC_PEERS ROS_AUTOMATIC_DISCOVERY_RANGE ROS_DISCOVERY_SERVER FASTDDS_BUILTIN_TRANSPORTS FASTRTPS_DEFAULT_PROFILES_FILE
+export ROS_DISABLE_ROS2CLI_DAEMON=1
 source ~/ros2_ws/src/ar_project/deploy/transport/transport_env.sh
 
-ros2 launch ar_project hardware_bringup.launch.py \
-  enable_imu_orientation_filter:=false
+ros2 launch ar_project hardware_bringup.launch.py
+```
+
+`collision_monitor` на железе по умолчанию выключен: при нестабильных timestamp
+`/scan` он блокирует весь контур движения сообщениями `Robot to stop due to
+invalid source`. Если `/scan` и TF проверены и нужны реактивные stop/slowdown
+полигоны, включайте явно:
+
+```bash
+ros2 launch ar_project hardware_bringup.launch.py use_collision_monitor:=true
 ```
 
 **Pi T2 — RealSense RGB-D + IMU**
@@ -96,34 +106,47 @@ ros2 launch ar_project hardware_bringup.launch.py \
 cd ~/ros2_ws
 source /opt/ros/jazzy/setup.bash
 source ~/ros2_ws/install/setup.bash
+unset ROS_LOCALHOST_ONLY ROS_STATIC_PEERS ROS_AUTOMATIC_DISCOVERY_RANGE ROS_DISCOVERY_SERVER FASTDDS_BUILTIN_TRANSPORTS FASTRTPS_DEFAULT_PROFILES_FILE
+export ROS_DISABLE_ROS2CLI_DAEMON=1
 source ~/ros2_ws/src/ar_project/deploy/transport/transport_env.sh
 
-ros2 launch ar_project realsense_rgbd_pi.launch.py
+ros2 launch ar_project realsense_rgbd_pi.launch.py \
+  rgb_camera.color_profile:=640x480x6 \
+  depth_module.depth_profile:=424x240x6
 ```
 
-**Pi T3 — Nav2**
+Штатный режим для VLM-тестов на Wi-Fi: RGB `640x480x6` и depth `424x240x6`.
+Edge-детектор масштабирует RGB-координаты в depth-сетку перед выборкой глубины.
+Если нужно вернуться к старому профилю, запусти этот же launch без аргументов
+или явно задай `640x480x15` / `424x240x15`.
+
+**Pi T3 — map->odom correction relay, запускать до Nav2**
 
 ```bash
 cd ~/ros2_ws
 source /opt/ros/jazzy/setup.bash
 source ~/ros2_ws/install/setup.bash
+unset ROS_LOCALHOST_ONLY ROS_STATIC_PEERS ROS_AUTOMATIC_DISCOVERY_RANGE ROS_DISCOVERY_SERVER FASTDDS_BUILTIN_TRANSPORTS FASTRTPS_DEFAULT_PROFILES_FILE
+export ROS_DISABLE_ROS2CLI_DAEMON=1
+source ~/ros2_ws/src/ar_project/deploy/transport/transport_env.sh
+
+ros2 run search_coordinator map_odom_relay --ros-args \
+  -p use_sim_time:=false
+```
+
+**Pi T4 — Nav2**
+
+```bash
+cd ~/ros2_ws
+source /opt/ros/jazzy/setup.bash
+source ~/ros2_ws/install/setup.bash
+unset ROS_LOCALHOST_ONLY ROS_STATIC_PEERS ROS_AUTOMATIC_DISCOVERY_RANGE ROS_DISCOVERY_SERVER FASTDDS_BUILTIN_TRANSPORTS FASTRTPS_DEFAULT_PROFILES_FILE
+export ROS_DISABLE_ROS2CLI_DAEMON=1
 source ~/ros2_ws/src/ar_project/deploy/transport/transport_env.sh
 
 ros2 launch ar_project navigation_launch.py \
   use_sim_time:=false \
   odom_topic:=/odometry/filtered
-```
-
-**Pi T4 — map->odom correction relay**
-
-```bash
-cd ~/ros2_ws
-source /opt/ros/jazzy/setup.bash
-source ~/ros2_ws/install/setup.bash
-source ~/ros2_ws/src/ar_project/deploy/transport/transport_env.sh
-
-ros2 run search_coordinator map_odom_relay --ros-args \
-  -p use_sim_time:=false
 ```
 
 **Pi T5 — executive / skill servers для VLM**
@@ -132,6 +155,8 @@ ros2 run search_coordinator map_odom_relay --ros-args \
 cd ~/ros2_ws
 source /opt/ros/jazzy/setup.bash
 source ~/ros2_ws/install/setup.bash
+unset ROS_LOCALHOST_ONLY ROS_STATIC_PEERS ROS_AUTOMATIC_DISCOVERY_RANGE ROS_DISCOVERY_SERVER FASTDDS_BUILTIN_TRANSPORTS FASTRTPS_DEFAULT_PROFILES_FILE
+export ROS_DISABLE_ROS2CLI_DAEMON=1
 source ~/ros2_ws/src/ar_project/deploy/transport/transport_env.sh
 
 ros2 run search_coordinator coordinator_node --ros-args \
@@ -146,6 +171,8 @@ ros2 run search_coordinator coordinator_node --ros-args \
 cd ~/ros2_ws
 source /opt/ros/jazzy/setup.bash
 source ~/ros2_ws/install/setup.bash
+unset ROS_LOCALHOST_ONLY ROS_STATIC_PEERS ROS_AUTOMATIC_DISCOVERY_RANGE ROS_DISCOVERY_SERVER FASTDDS_BUILTIN_TRANSPORTS FASTRTPS_DEFAULT_PROFILES_FILE
+export ROS_DISABLE_ROS2CLI_DAEMON=1
 source ~/ros2_ws/src/ar_project/deploy/transport/transport_env.sh
 
 ros2 launch ar_project edge_bringup.launch.py
@@ -153,6 +180,9 @@ ros2 launch ar_project edge_bringup.launch.py
 
 Что поднимается: единственный Wi-Fi consumer камеры, локальные `/camera_edge/*`, RTAB-Map и
 dashboard. Этот терминал **не** запускает detector и VLM-orchestrator.
+Для RealSense 6 FPS внутри `edge_bringup` RTAB-Map запускается с расширенным
+RGB-D sync-окном: `approx_sync_max_interval:=0.5`, `topic_queue_size:=120`,
+`sync_queue_size:=120`, `detection_rate:=1`.
 
 **Edge T2 — detector / Set-of-Mark**
 
@@ -160,14 +190,17 @@ dashboard. Этот терминал **не** запускает detector и VLM
 cd ~/ros2_ws
 source /opt/ros/jazzy/setup.bash
 source ~/ros2_ws/install/setup.bash
+unset ROS_LOCALHOST_ONLY ROS_STATIC_PEERS ROS_AUTOMATIC_DISCOVERY_RANGE ROS_DISCOVERY_SERVER FASTDDS_BUILTIN_TRANSPORTS FASTRTPS_DEFAULT_PROFILES_FILE
+export ROS_DISABLE_ROS2CLI_DAEMON=1
 source ~/ros2_ws/src/ar_project/deploy/transport/transport_env.sh
 
 /home/user/.venvs/ros-jazzy-ml/bin/python -m object_tracking.detect_target_server \
   --ros-args \
   -p use_sim_time:=false \
   -p image_topic:=/camera_edge/color/image_raw \
+  -p depth_topic:=/camera_edge/aligned_depth_to_color/image_raw \
   -p use_compressed_input:=false \
-  -p depth_topic:=/camera_edge/aligned_depth_to_color/image_raw
+  -p conf_default:=0.20
 ```
 
 **Edge T3 — VLM-orchestrator**
@@ -176,30 +209,73 @@ source ~/ros2_ws/src/ar_project/deploy/transport/transport_env.sh
 cd ~/ros2_ws
 source /opt/ros/jazzy/setup.bash
 source ~/ros2_ws/install/setup.bash
+unset ROS_LOCALHOST_ONLY ROS_STATIC_PEERS ROS_AUTOMATIC_DISCOVERY_RANGE ROS_DISCOVERY_SERVER FASTDDS_BUILTIN_TRANSPORTS FASTRTPS_DEFAULT_PROFILES_FILE
+export ROS_DISABLE_ROS2CLI_DAEMON=1
 source ~/ros2_ws/src/ar_project/deploy/transport/transport_env.sh
-set -a; source ~/ros2_ws/src/object_tracking/planner_orchestrator/vlm.env; set +a
+set -a
+source ~/ros2_ws/src/object_tracking/planner_orchestrator/vlm.env
+set +a
 
 /home/user/.venvs/ros-jazzy-ml/bin/python -m planner_orchestrator.orchestrator_node \
   --ros-args \
   -p use_sim_time:=false \
+  -p use_mock:=false \
   -p async_replan:=false \
-  -p detect_conf:=0.5 \
+  -p replan_every_n:=3 \
+  -p max_steps:=40 \
+  -p detect_conf:=0.20 \
   -p vlm_timeout_s:=30.0 \
+  -p send_map:=true \
+  -p motion_fallback_frame:=odom \
   -p camera_image_topic:=/camera_edge/color/image_raw
 ```
 
-**Edge T4 — отправка VLM-миссии**
+**Edge T4 — RViz**
 
 ```bash
 cd ~/ros2_ws
 source /opt/ros/jazzy/setup.bash
 source ~/ros2_ws/install/setup.bash
+unset ROS_LOCALHOST_ONLY ROS_STATIC_PEERS ROS_AUTOMATIC_DISCOVERY_RANGE ROS_DISCOVERY_SERVER FASTDDS_BUILTIN_TRANSPORTS FASTRTPS_DEFAULT_PROFILES_FILE
+export ROS_DISABLE_ROS2CLI_DAEMON=1
 source ~/ros2_ws/src/ar_project/deploy/transport/transport_env.sh
 
-ros2 topic pub --once /vlm_mission std_msgs/msg/String "{data: 'bus'}"
+ros2 launch ar_project rviz_launch.py \
+  use_sim_time:=false \
+  config:=$(ros2 pkg prefix ar_project)/share/ar_project/config/rtabmap_rgbd.rviz
+```
+
+**Edge T5 — отправка VLM-миссии**
+
+```bash
+cd ~/ros2_ws
+source /opt/ros/jazzy/setup.bash
+source ~/ros2_ws/install/setup.bash
+unset ROS_LOCALHOST_ONLY ROS_STATIC_PEERS ROS_AUTOMATIC_DISCOVERY_RANGE ROS_DISCOVERY_SERVER FASTDDS_BUILTIN_TRANSPORTS FASTRTPS_DEFAULT_PROFILES_FILE
+export ROS_DISABLE_ROS2CLI_DAEMON=1
+source ~/ros2_ws/src/ar_project/deploy/transport/transport_env.sh
+
+ros2 topic pub --once /vlm_mission std_msgs/msg/String "{data: 'chair'}"
 ```
 
 Dashboard: `http://localhost:8088` на edge-ноутбуке.
+
+Минимальная проверка перед миссией:
+
+```bash
+# Pi
+ros2 lifecycle get /planner_server
+ros2 lifecycle get /controller_server
+ros2 lifecycle get /bt_navigator
+timeout 8 ros2 topic hz /scan
+timeout 8 ros2 topic hz /odometry/filtered
+
+# Edge
+timeout 8 ros2 topic hz /camera_edge/color/image_raw
+timeout 8 ros2 topic hz /camera_edge/aligned_depth_to_color/image_raw
+timeout 8 ros2 topic hz /map_odom_correction
+ros2 action list | grep detect
+```
 
 Перед автономным запуском на железе сначала пройти safety-проверки из `HIL_BRINGUP_CHECKLIST.md`,
 раздел B: колёса над землёй, quick-stop, watchdog, collision monitor.
@@ -267,7 +343,7 @@ ros2 topic pub --once /vlm_mission std_msgs/msg/String "{data: bus}"
 set -a; source object_tracking/planner_orchestrator/vlm.env; set +a   # loads VLM_* (never printed)
 /home/user/.venvs/ros-jazzy-ml/bin/python -m planner_orchestrator.orchestrator_node \
   --ros-args -p use_sim_time:=true -p use_mock:=false -p replan_every_n:=3 -p max_steps:=40 \
-  -p async_replan:=false -p detect_conf:=0.5
+  -p async_replan:=false -p detect_conf:=0.20
 # expect: "planner_orchestrator up ... client=OpenAICompatibleClient creds=env"
 ros2 topic pub --once /vlm_mission std_msgs/msg/String "{data: bus}"   # ЧИСТЫЙ лейбл (см. ниже)
 ```
@@ -295,7 +371,7 @@ Nav) · `DETECT_ALL`(детект всех объектов + классы, в n
 | Параметр | Деф. | Зачем |
 |---|---|---|
 | `async_replan` | `true` | `false` = дискретные шаги (едь→стоп→свежее наблюдение→думай). Для наблюдения/сравнения ставь `false` |
-| `detect_conf` | `0.0` | Порог уверенности (0.0 = деф. детектора 0.25). `0.5` + чистый лейбл — игнор слабых/краевых детекций |
+| `detect_conf` | `0.0` | Порог уверенности (0.0 = деф. детектора 0.20). Для текущих VLM-тестов используем `0.20`; если много ложных целей, временно поднимайте до `0.5` |
 | `send_map` | `true` | `false` = не слать карту 2-м изображением (легче запрос; если эндпоинт таймаутит) |
 | `map_max_px` | `384` | Макс. сторона рендера карты |
 | `vlm_timeout_s` | `8.0` | На медленном эндпоинте/с картой подними до `30–60`, иначе circuit-breaker → DEGRADED |
@@ -303,7 +379,8 @@ Nav) · `DETECT_ALL`(детект всех объектов + классы, в n
 
 > **Цель — ЧИСТЫЙ лейбл объекта** (`bus`, НЕ `find a bus`/`ride to bus`): нормализации запроса нет,
 > YOLOE матчит строку как один класс. `bus` → conf ~0.66; `ride to bus` → ~0.45 (слабее, ложные
-> «доехал» у края кадра). При NL-запросе поднимай `detect_conf`.
+> «доехал» у края кадра). Для повышения полноты детекции держите `detect_conf:=0.20`; при ложных
+> срабатываниях временно повышайте порог.
 
 > Замечание по RAM: gz + RTAB-Map + Nav2 + YOLOE вместе требуют >4 ГБ. На хосте с ≤4 ГБ запускайте
 > либо детектор отдельно (мир из 3b), ЛИБО nav-стек, но не всё сразу.
@@ -314,72 +391,16 @@ Nav) · `DETECT_ALL`(детект всех объектов + классы, в n
 
 ---
 
-## 4. ЖЕЛЕЗО (СНАЧАЛА следуйте §B safety в HIL_BRINGUP_CHECKLIST.md — колёса над землёй)
+## 4. ЖЕЛЕЗО
 
-### 4a. Edge-машина (GPU)
+Актуальная последовательность терминалов для реального робота находится в короткой карточке
+запуска: **§2.1 → "Реальное железо: Pi + edge-ноутбук"**. Этот раздел намеренно не
+дублирует команды, чтобы в RUNBOOK не было двух расходящихся наборов.
 
-> **Единый канал камеры (анти-fan-out).** Через Wi-Fi идёт РОВНО ОДИН сжатый поток камеры
-> (JPEG color + compressedDepth + camera_info). `edge_bringup` поднимает relay, который
-> декомпрессирует его один раз и переиздаёт **edge-локально** на `/camera_edge/*`. ВСЕ
-> edge-ноды (SLAM, детектор, оркестратор) подписываются ТОЛЬКО на `/camera_edge/*`.
-> НИКОГДА не подписывайте edge-ноду напрямую на `/camera/camera/*` — каждая такая подписка
-> открывает свой собственный поток с Pi по Wi-Fi (raw color ≈ 921 КБ/кадр, raw depth
-> ≈ 614 КБ/кадр, 15 Гц) и Pi захлёбывается.
-
-```bash
-sudo systemctl start rmw-zenoh-router.service          # deploy/transport (transport)
-sudo systemctl start chrony   # chrony-edge.conf master                (deploy/time_sync)
-source /opt/ros/jazzy/setup.bash
-source ~/ros2_ws/install/setup.bash
-source ~/ros2_ws/src/ar_project/deploy/transport/transport_env.sh
-# Camera relay (единственный Wi-Fi потребитель камеры) + RTAB-Map SLAM на /camera_edge/*:
-ros2 launch ar_project edge_bringup.launch.py                           # SLAM -> /map + MapOdomCorrection
-# Детектор (YOLOE, venv) — edge-локальные топики relay:
-/home/user/.venvs/ros-jazzy-ml/bin/python -m object_tracking.detect_target_server \
-  --ros-args -p use_sim_time:=false \
-  -p image_topic:=/camera_edge/color/image_raw -p use_compressed_input:=false \
-  -p depth_topic:=/camera_edge/aligned_depth_to_color/image_raw
-# VLM-оркестратор (только для VLM-режима): creds из env, НИКОГДА не в параметрах/логах
-set -a; source ~/ros2_ws/src/object_tracking/planner_orchestrator/vlm.env; set +a
-/home/user/.venvs/ros-jazzy-ml/bin/python -m planner_orchestrator.orchestrator_node \
-  --ros-args -p use_sim_time:=false -p async_replan:=false -p detect_conf:=0.5 \
-  -p vlm_timeout_s:=30.0 \
-  -p camera_image_topic:=/camera_edge/color/image_raw   # карта /map берётся edge-локально (RTAB-Map)
-```
-Параметры VLM — см. таблицу в §3c. `detect_target_server` и `orchestrator_node` оба в `~/.venvs/ros-jazzy-ml`
-(torch для детектора; cv2/numpy для рендера карты у оркестратора).
-
-### 4b. Pi (робот)
-Все ноды на Pi — с `use_sim_time:=false` (на железе НЕТ `/clock`; см. чек-лист A).
-```bash
-source /opt/ros/jazzy/setup.bash && source ~/ros2_ws/install/setup.bash
-source ~/ros2_ws/src/ar_project/deploy/transport/transport_env.sh
-ros2 launch ar_project hardware_bringup.launch.py enable_imu_orientation_filter:=false
-                                                         # ros2_control + CAN/EPOS4 + twist_mux
-                                                         #   + collision_monitor + cmd_vel watchdog + /scan
-ros2 launch ar_project realsense_rgbd_pi.launch.py       # RealSense (RGB+depth+IMU); EKF поднят в hardware_bringup
-ros2 launch ar_project navigation_launch.py use_sim_time:=false odom_topic:=/odometry/filtered
-ros2 run search_coordinator map_odom_relay --ros-args -p use_sim_time:=false      # применяет MapOdomCorrection с edge
-ros2 run search_coordinator coordinator_node --ros-args -p use_sim_time:=false    # executive: SeekObject FSM + 5 skill-серверов
-ros2 run search_coordinator frontier_extractor --ros-args -p use_sim_time:=false  # только для FLAT (VLM фронтиры не использует)
-```
-`coordinator_node` поднимает skill-серверы (`go_to_pose`, `approach_detection`, `explore_frontier`,
-`get_observation`, `stop`), которыми и управляет orchestrator с edge в VLM-режиме. `frontier_extractor`
-нужен только FLAT-режиму.
-
-### 4c. Запуск миссии на железе (с любой машины графа ROS)
-```bash
-# FLAT (исполнителем владеет Pi):
-ros2 action send_goal /seek_object object_tracking_msgs/action/SeekObject \
-  "{instruction: 'bus', request_id: 'm1', mission_epoch: 0, allow_vlm: false}" --feedback
-
-# VLM (исполнителем владеет orchestrator на edge -> гоняет skill-ы Pi):
-#   нужен §4a orchestrator. Цель -- ЧИСТЫЙ лейбл.
-ros2 topic pub --once /vlm_mission std_msgs/msg/String "{data: 'bus'}"
-```
-> **СНАЧАЛА пройдите раздел B (safety) в `HIL_BRINGUP_CHECKLIST.md` — колёса над землёй.** Не запускайте
-> автономную миссию, пока B1–B7 не зелёные. Полная последовательность ввода в эксплуатацию (time-sync,
-> transport, восприятие, FLAT→VLM, деградация) — там же, разделы C–I.
+Перед автономной миссией сначала пройти safety-проверки из `HIL_BRINGUP_CHECKLIST.md`,
+раздел B: колёса над землёй, quick-stop, watchdog, collision monitor. Полная
+последовательность ввода в эксплуатацию (time-sync, transport, восприятие, FLAT→VLM,
+деградация) — там же, разделы C–I.
 
 ---
 
@@ -456,8 +477,10 @@ ros2 topic pub --once /vlm_mission std_msgs/msg/String "{data: 'bus'}"
   `-p vlm_base_url:=`) и не передавайте `use_mock:=true`.
 - **Миссия уходит в `DEGRADED` (FLAT fallback):** реальный VLM-эндпоинт упал/таймаутил 3 раза подряд
   (circuit-breaker). Подними `-p vlm_timeout_s:=30..60` и/или `-p send_map:=false` (два изображения тяжелее).
-- **VLM объявляет `DONE`/`reached`, а робот не у цели:** слабая/краевая детекция. Признак — `conf≈0.45`
-  в `observe@`. Используй ЧИСТЫЙ лейбл (`bus`, не `ride to bus`) и `-p detect_conf:=0.5`.
+- **VLM объявляет `DONE`/`reached`, а робот не у цели:** слабая/краевая детекция или неверная глубина.
+  Признак — низкий `conf` или `distance_m=null/unknown` в `observe@`. Используй ЧИСТЫЙ лейбл
+  (`bus`, не `ride to bus`). Если проблема именно в ложных детекциях — временно подними
+  `detect_conf`; если проблема в глубине — проверь `/camera_edge/aligned_depth_to_color/image_raw`.
 - **VLM «видит» цель, хотя не смотрит на неё:** проверь `conf`/`distance_m` в `observe@`. FOV камеры
   всего ~62° (±31°); если цель реально вне кадра — детектор отдаёт `0 detection(s)` (проверено). Если
   детекция есть — край баннера попал в кадр. Подними `detect_conf`, чтобы реагировать только на уверенные.

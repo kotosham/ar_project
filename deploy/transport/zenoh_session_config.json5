@@ -11,13 +11,22 @@
 //   export ZENOH_CONFIG_OVERRIDE='connect/endpoints=["tcp/192.168.1.10:7447"]'
 // For a single-host smoke test, point connect at tcp/localhost:7447.
 {
-  mode: "peer",
+  mode: "client",
 
-  // Multicast OFF: never auto-discover on the LAN, only via the edge router +
-  // gossip. This is the whole point of the single-router topology.
+  // Multicast/gossip OFF for ROS nodes: every process connects only to the
+  // single edge router below. Peer mode/gossip made Pi nodes try direct
+  // process-to-process TCP links to edge nodes, which overloaded the robot
+  // control side when edge_bringup started.
   scouting: {
     multicast: { enabled: false },
-    gossip: { enabled: true },
+    gossip: { enabled: false },
+  },
+
+  // Required by rmw_zenoh's publication cache / advanced publishers. Without
+  // this, some ROS 2 nodes can crash while creating publishers under rmw_zenoh.
+  timestamping: {
+    enabled: { router: true, peer: true, client: true },
+    drop_future_timestamp: false,
   },
 
   // Connect to the single edge router. 12 MB TCP buffers per link (bounded by
