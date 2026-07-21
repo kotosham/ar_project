@@ -30,10 +30,43 @@ constexpr uint32_t kControlwordQuickStop = 0x0002U;
 constexpr uint16_t kTargetVelocityIndex = 0x60FF;
 constexpr uint16_t kStatuswordIndex = 0x6041;
 constexpr uint32_t kStatuswordFaultBit = 0x0008U;
+constexpr const char * kQuickStopTriggerTopic = "/quick_stop_trigger";
 }  // namespace
 
 namespace ar_project
 {
+
+hardware_interface::CallbackReturn EmbodiedRobotSystem::on_init(
+  const hardware_interface::HardwareComponentInterfaceParams & params)
+{
+  const auto base_result = canopen_ros2_control::RobotSystem::on_init(params);
+  if (base_result != hardware_interface::CallbackReturn::SUCCESS)
+  {
+    return base_result;
+  }
+
+  auto node = get_node();
+  if (!node)
+  {
+    RCLCPP_ERROR(robot_system_logger, "Cannot create quick-stop subscriber: hardware node is null.");
+    return hardware_interface::CallbackReturn::ERROR;
+  }
+
+  auto qos = rclcpp::QoS(rclcpp::KeepLast(1)).reliable().durability_volatile();
+  quick_stop_sub_ = node->create_subscription<std_msgs::msg::Empty>(
+    kQuickStopTriggerTopic,
+    qos,
+    [this](const std_msgs::msg::Empty::SharedPtr) {
+      request_quick_stop("external /quick_stop_trigger");
+    });
+
+  RCLCPP_INFO(
+    robot_system_logger,
+    "External CiA-402 quick-stop trigger subscribed on '%s'.",
+    kQuickStopTriggerTopic);
+
+  return hardware_interface::CallbackReturn::SUCCESS;
+}
 
 bool EmbodiedRobotSystem::switch_operation_mode_via_sdo(
   canopen_ros2_control::Cia402Data & motor, uint16_t mode, const std::string & reason)

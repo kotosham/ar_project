@@ -10,7 +10,9 @@
 
 #include "canopen_ros2_control/robot_system.hpp"
 #include "rclcpp/duration.hpp"
+#include "rclcpp/subscription.hpp"
 #include "rclcpp/time.hpp"
+#include "std_msgs/msg/empty.hpp"
 
 namespace ar_project
 {
@@ -20,6 +22,9 @@ class EmbodiedRobotSystem : public canopen_ros2_control::RobotSystem
 public:
   EmbodiedRobotSystem() = default;
   ~EmbodiedRobotSystem() override = default;
+
+  hardware_interface::CallbackReturn on_init(
+    const hardware_interface::HardwareComponentInterfaceParams & params) override;
 
   hardware_interface::CallbackReturn on_activate(
     const rclcpp_lifecycle::State & previous_state) override;
@@ -78,6 +83,7 @@ private:
   // action / collision / bus-off will also set it in later phases). Atomic so a
   // future non-RT trigger can set it safely.
   std::atomic<bool> quick_stop_active_{false};
+  rclcpp::Subscription<std_msgs::msg::Empty>::SharedPtr quick_stop_sub_;
 };
 
 }  // namespace ar_project

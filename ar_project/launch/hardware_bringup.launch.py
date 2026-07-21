@@ -336,7 +336,7 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             'enable_imu_orientation_filter',
-            default_value='true',
+            default_value='false',
             description='Run imu_filter_madgwick on the RealSense IMU and feed filtered yaw + yaw rate into the EKF.',
         ),
         DeclareLaunchArgument(

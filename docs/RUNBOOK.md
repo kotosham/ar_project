@@ -19,10 +19,10 @@
 - ROS 2 **Jazzy** + colcon + rosdep. Один раз `sudo rosdep init && rosdep update`.
 - Venv детектора на edge (для него нужен torch; у системного shebang ноды torch нет):
   ```bash
-  python3 -m venv --system-site-packages ~/ot_venv
-  source ~/ot_venv/bin/activate
+  python3 -m venv --system-site-packages ~/.venvs/ros-jazzy-ml
+  source ~/.venvs/ros-jazzy-ml/bin/activate
   pip install torch torchvision --index-url https://download.pytorch.org/whl/cu124
-  pip install -r object_tracking/requirements.txt
+  pip install -r ~/ros2_ws/src/object_tracking/requirements.txt
   ```
   Веса YOLOE лежат в `object_tracking/object_tracking/model_weights/`
   (`yoloe-11s-seg.pt` + `mobileclip_blt.ts`).
@@ -84,8 +84,10 @@ Dashboard: `http://localhost:8088`.
 cd ~/ros2_ws
 source /opt/ros/jazzy/setup.bash
 source ~/ros2_ws/install/setup.bash
+source ~/ros2_ws/src/ar_project/deploy/transport/transport_env.sh
 
-ros2 launch ar_project hardware_bringup.launch.py
+ros2 launch ar_project hardware_bringup.launch.py \
+  enable_imu_orientation_filter:=false
 ```
 
 **Pi T2 — RealSense RGB-D + IMU**
@@ -94,6 +96,7 @@ ros2 launch ar_project hardware_bringup.launch.py
 cd ~/ros2_ws
 source /opt/ros/jazzy/setup.bash
 source ~/ros2_ws/install/setup.bash
+source ~/ros2_ws/src/ar_project/deploy/transport/transport_env.sh
 
 ros2 launch ar_project realsense_rgbd_pi.launch.py
 ```
@@ -104,6 +107,7 @@ ros2 launch ar_project realsense_rgbd_pi.launch.py
 cd ~/ros2_ws
 source /opt/ros/jazzy/setup.bash
 source ~/ros2_ws/install/setup.bash
+source ~/ros2_ws/src/ar_project/deploy/transport/transport_env.sh
 
 ros2 launch ar_project navigation_launch.py \
   use_sim_time:=false \
@@ -116,6 +120,7 @@ ros2 launch ar_project navigation_launch.py \
 cd ~/ros2_ws
 source /opt/ros/jazzy/setup.bash
 source ~/ros2_ws/install/setup.bash
+source ~/ros2_ws/src/ar_project/deploy/transport/transport_env.sh
 
 ros2 run search_coordinator map_odom_relay --ros-args \
   -p use_sim_time:=false
@@ -127,6 +132,7 @@ ros2 run search_coordinator map_odom_relay --ros-args \
 cd ~/ros2_ws
 source /opt/ros/jazzy/setup.bash
 source ~/ros2_ws/install/setup.bash
+source ~/ros2_ws/src/ar_project/deploy/transport/transport_env.sh
 
 ros2 run search_coordinator coordinator_node --ros-args \
   -p use_sim_time:=false
@@ -140,6 +146,7 @@ ros2 run search_coordinator coordinator_node --ros-args \
 cd ~/ros2_ws
 source /opt/ros/jazzy/setup.bash
 source ~/ros2_ws/install/setup.bash
+source ~/ros2_ws/src/ar_project/deploy/transport/transport_env.sh
 
 ros2 launch ar_project edge_bringup.launch.py
 ```
@@ -153,6 +160,7 @@ dashboard. Этот терминал **не** запускает detector и VLM
 cd ~/ros2_ws
 source /opt/ros/jazzy/setup.bash
 source ~/ros2_ws/install/setup.bash
+source ~/ros2_ws/src/ar_project/deploy/transport/transport_env.sh
 
 /home/user/.venvs/ros-jazzy-ml/bin/python -m object_tracking.detect_target_server \
   --ros-args \
@@ -168,6 +176,7 @@ source ~/ros2_ws/install/setup.bash
 cd ~/ros2_ws
 source /opt/ros/jazzy/setup.bash
 source ~/ros2_ws/install/setup.bash
+source ~/ros2_ws/src/ar_project/deploy/transport/transport_env.sh
 set -a; source ~/ros2_ws/src/object_tracking/planner_orchestrator/vlm.env; set +a
 
 /home/user/.venvs/ros-jazzy-ml/bin/python -m planner_orchestrator.orchestrator_node \
@@ -185,6 +194,7 @@ set -a; source ~/ros2_ws/src/object_tracking/planner_orchestrator/vlm.env; set +
 cd ~/ros2_ws
 source /opt/ros/jazzy/setup.bash
 source ~/ros2_ws/install/setup.bash
+source ~/ros2_ws/src/ar_project/deploy/transport/transport_env.sh
 
 ros2 topic pub --once /vlm_mission std_msgs/msg/String "{data: 'bus'}"
 ```
@@ -223,7 +233,7 @@ FSM проходит SEARCH (едет к frontier-ам) → при свежем 
 ### 3b. Реальная детекция (этап DETECT) — запустите детектор в venv на edge
 Используйте `flat_detect.world` (в нём есть билборд bus.jpg, который YOLOE надёжно детектирует):
 ```bash
-~/ot_venv/bin/python $(ros2 pkg prefix object_tracking)/lib/object_tracking/detect_target_server \
+/home/user/.venvs/ros-jazzy-ml/bin/python -m object_tracking.detect_target_server \
   --ros-args -p use_sim_time:=true
 ```
 DETECT/APPROACH executive потребляет `/target_pixel`. (Без детектора для тестов можно
@@ -255,7 +265,7 @@ ros2 topic pub --once /vlm_mission std_msgs/msg/String "{data: bus}"
 ```bash
 # detector running (3b) + executive up. In the orchestrator shell:
 set -a; source object_tracking/planner_orchestrator/vlm.env; set +a   # loads VLM_* (never printed)
-~/ot_venv/bin/python $(ros2 pkg prefix planner_orchestrator)/lib/planner_orchestrator/orchestrator_node \
+/home/user/.venvs/ros-jazzy-ml/bin/python -m planner_orchestrator.orchestrator_node \
   --ros-args -p use_sim_time:=true -p use_mock:=false -p replan_every_n:=3 -p max_steps:=40 \
   -p async_replan:=false -p detect_conf:=0.5
 # expect: "planner_orchestrator up ... client=OpenAICompatibleClient creds=env"
@@ -265,7 +275,8 @@ Orchestrator забирает реальные Set-of-Mark-кандидаты и
 (см. ниже) и диспетчеризует выбранное действие в skill-ы executive. Для офлайн-прогона используйте
 `-p use_mock:=true` (ключ API не нужен — это же FLAT-фоллбэк при деградации).
 
-> Запускать орхестратор через `~/ot_venv/bin/python <...>/orchestrator_node` (а не `ros2 run`): ему
+> Запускать орхестратор через `/home/user/.venvs/ros-jazzy-ml/bin/python -m planner_orchestrator.orchestrator_node`
+> (а не `ros2 run`): ему
 > нужны cv2/numpy для рендера карты и кодирования кадра; venv это гарантирует. Без cv2 карта молча
 > отключается (`send_map` авто-off).
 
@@ -318,30 +329,35 @@ Nav) · `DETECT_ALL`(детект всех объектов + классы, в n
 ```bash
 sudo systemctl start rmw-zenoh-router.service          # deploy/transport (transport)
 sudo systemctl start chrony   # chrony-edge.conf master                (deploy/time_sync)
+source /opt/ros/jazzy/setup.bash
+source ~/ros2_ws/install/setup.bash
+source ~/ros2_ws/src/ar_project/deploy/transport/transport_env.sh
 # Camera relay (единственный Wi-Fi потребитель камеры) + RTAB-Map SLAM на /camera_edge/*:
 ros2 launch ar_project edge_bringup.launch.py                           # SLAM -> /map + MapOdomCorrection
 # Детектор (YOLOE, venv) — edge-локальные топики relay:
-~/ot_venv/bin/python $(ros2 pkg prefix object_tracking)/lib/object_tracking/detect_target_server \
+/home/user/.venvs/ros-jazzy-ml/bin/python -m object_tracking.detect_target_server \
   --ros-args -p use_sim_time:=false \
   -p image_topic:=/camera_edge/color/image_raw -p use_compressed_input:=false \
   -p depth_topic:=/camera_edge/aligned_depth_to_color/image_raw
 # VLM-оркестратор (только для VLM-режима): creds из env, НИКОГДА не в параметрах/логах
-set -a; source object_tracking/planner_orchestrator/vlm.env; set +a
-~/ot_venv/bin/python $(ros2 pkg prefix planner_orchestrator)/lib/planner_orchestrator/orchestrator_node \
+set -a; source ~/ros2_ws/src/object_tracking/planner_orchestrator/vlm.env; set +a
+/home/user/.venvs/ros-jazzy-ml/bin/python -m planner_orchestrator.orchestrator_node \
   --ros-args -p use_sim_time:=false -p async_replan:=false -p detect_conf:=0.5 \
   -p vlm_timeout_s:=30.0 \
   -p camera_image_topic:=/camera_edge/color/image_raw   # карта /map берётся edge-локально (RTAB-Map)
 ```
-Параметры VLM — см. таблицу в §3c. `detect_target_server` и `orchestrator_node` оба в `~/ot_venv`
+Параметры VLM — см. таблицу в §3c. `detect_target_server` и `orchestrator_node` оба в `~/.venvs/ros-jazzy-ml`
 (torch для детектора; cv2/numpy для рендера карты у оркестратора).
 
 ### 4b. Pi (робот)
 Все ноды на Pi — с `use_sim_time:=false` (на железе НЕТ `/clock`; см. чек-лист A).
 ```bash
 source /opt/ros/jazzy/setup.bash && source ~/ros2_ws/install/setup.bash
-ros2 launch ar_project hardware_bringup.launch.py        # ros2_control + CAN/EPOS4 + twist_mux
+source ~/ros2_ws/src/ar_project/deploy/transport/transport_env.sh
+ros2 launch ar_project hardware_bringup.launch.py enable_imu_orientation_filter:=false
+                                                         # ros2_control + CAN/EPOS4 + twist_mux
                                                          #   + collision_monitor + cmd_vel watchdog + /scan
-ros2 launch ar_project realsense_rgbd_pi.launch.py       # RealSense (RGB+depth+IMU) + EKF
+ros2 launch ar_project realsense_rgbd_pi.launch.py       # RealSense (RGB+depth+IMU); EKF поднят в hardware_bringup
 ros2 launch ar_project navigation_launch.py use_sim_time:=false odom_topic:=/odometry/filtered
 ros2 run search_coordinator map_odom_relay --ros-args -p use_sim_time:=false      # применяет MapOdomCorrection с edge
 ros2 run search_coordinator coordinator_node --ros-args -p use_sim_time:=false    # executive: SeekObject FSM + 5 skill-серверов
@@ -433,7 +449,7 @@ ros2 topic pub --once /vlm_mission std_msgs/msg/String "{data: 'bus'}"
 - **`explore_frontier: nav drive terminal=no_server`:** Nav2 ещё не активен — он больше не
   заносит в blacklist; он ждёт (`explore_nav_ready_timeout_s`) и повторяет попытку. Дайте Nav2 время активироваться.
 - **Детектор: `ModuleNotFoundError: torch`:** вы запустили его системным python — используйте
-  `~/ot_venv/bin/python <installed detect_target_server path>`.
+  `/home/user/.venvs/ros-jazzy-ml/bin/python -m object_tracking.detect_target_server`.
 - **DRIVE_TO_VISIBLE не едет:** кандидату нужна метрическая глубина — убедитесь, что топик глубины
   публикуется (`/camera/camera/aligned_depth_to_color/image_raw`) и задан `use_depth:=true`.
 - **Неожиданно `client=MockVlmClient` у VLM:** не разрешён base_url — выполните `source vlm.env` (или передайте
@@ -448,4 +464,4 @@ ros2 topic pub --once /vlm_mission std_msgs/msg/String "{data: 'bus'}"
 - **`gz sim` падает SIGSEGV на старте (ТОЛЬКО симуляция):** баг gz-transport discovery на WSL —
   `export GZ_IP=127.0.0.1` перед запуском + `pkill -9 -f 'gz sim'; pkill -9 -f ruby`. На железе Gazebo нет.
 - **Карта не приходит в VLM (`map=no` в логе):** нет паблишера `/map` (RTAB-Map не поднят на edge) или
-  `send_map:=false`, или у оркестратора нет cv2/numpy (запусти его из `~/ot_venv`).
+  `send_map:=false`, или у оркестратора нет cv2/numpy (запусти его из `~/.venvs/ros-jazzy-ml`).

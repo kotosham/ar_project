@@ -24,6 +24,7 @@ find_package(lely_core_libraries REQUIRED)
 find_package(pluginlib REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(rclcpp_lifecycle REQUIRED)
+find_package(std_msgs REQUIRED)
 # uncomment the following section in order to fill in
 # further dependencies manually.
 # find_package(<dependency> REQUIRED)
@@ -44,6 +45,7 @@ ament_target_dependencies(ar_project_embodied_robot_system
   pluginlib
   rclcpp
   rclcpp_lifecycle
+  std_msgs
 )
 
 pluginlib_export_plugin_description_file(hardware_interface ar_project_hardware_plugins.xml)
@@ -77,6 +79,7 @@ install(
     scripts/experiment_metrics_logger.py
     scripts/home_pose_manager.py
     scripts/odom_to_tf.py
+    scripts/rtabmap_map_odom_correction_publisher.py
     scripts/tracker_rgb_bridge.py
     scripts/tracker_rgbd_bridge.py
     scripts/twist_to_twist_stamped.py

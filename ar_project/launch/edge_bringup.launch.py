@@ -9,6 +9,9 @@ It starts:
      One compressed RGB + one compressedDepth + one CameraInfo stream cross the
      link; the relay decompresses once and republishes raw on /camera_edge/*.
   2. rtabmap_rgbd_launch.py wired to /camera_edge/* (edge-local, free).
+  3. rtabmap_map_odom_correction_publisher.py — wraps RTAB-Map /mapGraph
+     map_to_odom into /map_odom_correction. The Pi-side map_odom_relay gates
+     that correction and owns the local map->odom TF.
 
 The detector and VLM orchestrator still start from the ML venv (they need
 torch/cv2), but MUST also be pointed at /camera_edge/*:
@@ -33,7 +36,7 @@ from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
 from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.substitutions import LaunchConfiguration
+from launch.substitutions import LaunchConfiguration, PythonExpression
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
 
@@ -48,6 +51,7 @@ def generate_launch_description():
     delete_db_on_start = LaunchConfiguration('delete_db_on_start')
     detection_rate = LaunchConfiguration('detection_rate')
     publish_tf_map = LaunchConfiguration('publish_tf_map')
+    start_map_odom_correction = LaunchConfiguration('start_map_odom_correction')
 
     return LaunchDescription([
         DeclareLaunchArgument(
@@ -77,8 +81,13 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             'publish_tf_map',
+            default_value='false',
+            description='Let RTAB-Map broadcast map->odom on /tf. Keep false when map_odom_relay owns map->odom.',
+        ),
+        DeclareLaunchArgument(
+            'start_map_odom_correction',
             default_value='true',
-            description='Let RTAB-Map broadcast map->odom on /tf. Set false when map_odom_relay owns map->odom.',
+            description='Publish /map_odom_correction from RTAB-Map /mapGraph for the Pi-side map_odom_relay.',
         ),
         DeclareLaunchArgument(
             'start_dashboard',
@@ -118,7 +127,27 @@ def generate_launch_description():
             }.items(),
             condition=IfCondition(start_slam),
         ),
-        # 3. Human-readable mission dashboard (per-component health, VLM
+        # 3. Convert RTAB-Map's optimized map->odom into a low-rate correction
+        # message. The Pi relay gates it and republishes the fresh local TF.
+        Node(
+            package='ar_project',
+            executable='rtabmap_map_odom_correction_publisher.py',
+            name='rtabmap_map_odom_correction_publisher',
+            parameters=[{
+                'use_sim_time': False,
+                'map_graph_topic': '/mapGraph',
+                'info_topic': '/rtabmap/info',
+                'correction_topic': '/map_odom_correction',
+                'parent_frame': 'map',
+                'child_frame': 'odom',
+            }],
+            output='screen',
+            condition=IfCondition(PythonExpression([
+                "'", start_slam, "' == 'true' and '",
+                start_map_odom_correction, "' == 'true'",
+            ])),
+        ),
+        # 4. Human-readable mission dashboard (per-component health, VLM
         # thinking/actions, robot view). Edge-hosted so the heavy views stay
         # link-free; open http://<edge-host>:8088.
         Node(

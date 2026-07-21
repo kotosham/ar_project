@@ -44,7 +44,7 @@ from ar_project_msgs.action import (
 from ar_project_msgs.msg import FrontierArray
 from object_tracking_msgs.action import DetectTarget
 
-from fleet_comms.qos import control_cmd_latched, detection_stream_nodeadline
+from fleet_comms.qos import control_cmd_latched, detection_stream_nodeadline, media_besteffort
 from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
 
 from search_coordinator import approach_geometry as ag
@@ -385,9 +385,9 @@ class ApproachDetectionServer(SkillServer):
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, node)
         node.declare_parameter('approach_map_frame', 'map')
-        node.declare_parameter('approach_camera_frame', 'camera_link_optical')
+        node.declare_parameter('approach_camera_frame', 'camera_color_optical_frame')
         node.declare_parameter('approach_robot_frame', 'base_link')
-        node.declare_parameter('approach_camera_info_topic', '/camera/camera_info')
+        node.declare_parameter('approach_camera_info_topic', '/camera/camera/color/camera_info')
         node.declare_parameter('approach_min_depth_m', 0.1)
         node.declare_parameter('approach_max_depth_m', 8.0)
         # A detector with a minimum range (e.g. a billboard/large object that
@@ -401,7 +401,7 @@ class ApproachDetectionServer(SkillServer):
                                  detection_stream_nodeadline(), callback_group=self._sub_group)
         node.create_subscription(CameraInfo,
                                  node.get_parameter('approach_camera_info_topic').value,
-                                 self._on_info, 1, callback_group=self._sub_group)
+                                 self._on_info, media_besteffort(), callback_group=self._sub_group)
 
     def _on_pixel(self, msg):
         self._last_pixel = msg
