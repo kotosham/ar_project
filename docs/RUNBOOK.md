@@ -197,11 +197,20 @@ source ~/ros2_ws/src/ar_project/deploy/transport/transport_env.sh
 /home/user/.venvs/ros-jazzy-ml/bin/python -m object_tracking.detect_target_server \
   --ros-args \
   -p use_sim_time:=false \
+  -p model_mode:=hybrid_dino_yoloe \
   -p image_topic:=/camera_edge/color/image_raw \
   -p depth_topic:=/camera_edge/aligned_depth_to_color/image_raw \
   -p use_compressed_input:=false \
-  -p conf_default:=0.20
+  -p depth_point_strategy:=nearest_mask \
+  -p target_conf_default:=0.50 \
+  -p vocab_conf_default:=0.12
 ```
+
+В `hybrid_dino_yoloe` конкретная цель (`chair`, `office chair`, `bus`) детектируется через
+GroundingDINO+MobileSAM, а `DETECT_ALL` остается на YOLOE broad-vocab, чтобы обзор сцены не
+становился слишком тяжелым.
+`depth_point_strategy:=nearest_mask` означает, что пиксель для `DRIVE_TO_VISIBLE` выбирается
+по ближайшей валидной глубине внутри маски объекта, а не по геометрическому центру маски.
 
 **Edge T3 — VLM-orchestrator**
 
@@ -223,7 +232,9 @@ set +a
   -p async_replan:=false \
   -p replan_every_n:=3 \
   -p max_steps:=40 \
-  -p detect_conf:=0.20 \
+  -p detect_conf:=0.0 \
+  -p target_detect_conf:=0.50 \
+  -p detect_all_conf:=0.12 \
   -p vlm_timeout_s:=30.0 \
   -p send_map:=true \
   -p motion_fallback_frame:=odom \
@@ -343,7 +354,8 @@ ros2 topic pub --once /vlm_mission std_msgs/msg/String "{data: bus}"
 set -a; source object_tracking/planner_orchestrator/vlm.env; set +a   # loads VLM_* (never printed)
 /home/user/.venvs/ros-jazzy-ml/bin/python -m planner_orchestrator.orchestrator_node \
   --ros-args -p use_sim_time:=true -p use_mock:=false -p replan_every_n:=3 -p max_steps:=40 \
-  -p async_replan:=false -p detect_conf:=0.20
+  -p async_replan:=false -p detect_conf:=0.0 \
+  -p target_detect_conf:=0.50 -p detect_all_conf:=0.12
 # expect: "planner_orchestrator up ... client=OpenAICompatibleClient creds=env"
 ros2 topic pub --once /vlm_mission std_msgs/msg/String "{data: bus}"   # ЧИСТЫЙ лейбл (см. ниже)
 ```
@@ -371,7 +383,9 @@ Nav) · `DETECT_ALL`(детект всех объектов + классы, в n
 | Параметр | Деф. | Зачем |
 |---|---|---|
 | `async_replan` | `true` | `false` = дискретные шаги (едь→стоп→свежее наблюдение→думай). Для наблюдения/сравнения ставь `false` |
-| `detect_conf` | `0.0` | Порог уверенности (0.0 = деф. детектора 0.20). Для текущих VLM-тестов используем `0.20`; если много ложных целей, временно поднимайте до `0.5` |
+| `detect_conf` | `0.0` | Legacy override: если >0, одним числом переопределяет оба порога ниже |
+| `target_detect_conf` | `0.50` | Порог конкретной цели для DINO+MobileSAM (`chair`, `drawer cabinet`) — как в базовой дипломной реализации |
+| `detect_all_conf` | `0.12` | Порог `DETECT_ALL` для YOLOE broad-vocab — как в базовой дипломной реализации |
 | `send_map` | `true` | `false` = не слать карту 2-м изображением (легче запрос; если эндпоинт таймаутит) |
 | `map_max_px` | `384` | Макс. сторона рендера карты |
 | `vlm_timeout_s` | `8.0` | На медленном эндпоинте/с картой подними до `30–60`, иначе circuit-breaker → DEGRADED |
@@ -379,8 +393,9 @@ Nav) · `DETECT_ALL`(детект всех объектов + классы, в n
 
 > **Цель — ЧИСТЫЙ лейбл объекта** (`bus`, НЕ `find a bus`/`ride to bus`): нормализации запроса нет,
 > YOLOE матчит строку как один класс. `bus` → conf ~0.66; `ride to bus` → ~0.45 (слабее, ложные
-> «доехал» у края кадра). Для повышения полноты детекции держите `detect_conf:=0.20`; при ложных
-> срабатываниях временно повышайте порог.
+> «доехал» у края кадра). Для target-детекции держите `target_detect_conf:=0.50`;
+> если цель пропадает, временно снижайте до `0.35–0.40`. `DETECT_ALL` оставляйте мягче:
+> `detect_all_conf:=0.12`, иначе обзор сцены станет слишком бедным.
 
 > Замечание по RAM: gz + RTAB-Map + Nav2 + YOLOE вместе требуют >4 ГБ. На хосте с ≤4 ГБ запускайте
 > либо детектор отдельно (мир из 3b), ЛИБО nav-стек, но не всё сразу.
@@ -448,7 +463,7 @@ Nav) · `DETECT_ALL`(детект всех объектов + классы, в n
   plan@step N: VLM returned 1 action(s): DRIVE_FORWARD +0.50m
   step N: DRIVE_FORWARD +0.50m -- <rationale>
   ```
-  `conf` низкая (≈0.45) → детекция слабая/краевая (см. `detect_conf`). `map=no` → карта не пришла
+  `conf` низкая (≈0.45) → детекция слабая/краевая (см. `target_detect_conf`). `map=no` → карта не пришла
   (`/map` нет или `send_map:=false`). `DEGRADED: ran in FLAT fallback` в конце → VLM-эндпоинт упал
   (circuit-breaker), миссия доехала на mock — подними `vlm_timeout_s` / поставь `send_map:=false`.
 
@@ -478,12 +493,12 @@ Nav) · `DETECT_ALL`(детект всех объектов + классы, в n
 - **Миссия уходит в `DEGRADED` (FLAT fallback):** реальный VLM-эндпоинт упал/таймаутил 3 раза подряд
   (circuit-breaker). Подними `-p vlm_timeout_s:=30..60` и/или `-p send_map:=false` (два изображения тяжелее).
 - **VLM объявляет `DONE`/`reached`, а робот не у цели:** слабая/краевая детекция или неверная глубина.
-  Признак — низкий `conf` или `distance_m=null/unknown` в `observe@`. Используй ЧИСТЫЙ лейбл
-  (`bus`, не `ride to bus`). Если проблема именно в ложных детекциях — временно подними
-  `detect_conf`; если проблема в глубине — проверь `/camera_edge/aligned_depth_to_color/image_raw`.
+	  Признак — низкий `conf` или `distance_m=null/unknown` в `observe@`. Используй ЧИСТЫЙ лейбл
+	  (`bus`, не `ride to bus`). Если проблема именно в ложных детекциях — временно подними
+	  `target_detect_conf`; если проблема в глубине — проверь `/camera_edge/aligned_depth_to_color/image_raw`.
 - **VLM «видит» цель, хотя не смотрит на неё:** проверь `conf`/`distance_m` в `observe@`. FOV камеры
   всего ~62° (±31°); если цель реально вне кадра — детектор отдаёт `0 detection(s)` (проверено). Если
-  детекция есть — край баннера попал в кадр. Подними `detect_conf`, чтобы реагировать только на уверенные.
+	  детекция есть — край баннера попал в кадр. Подними `target_detect_conf`, чтобы реагировать только на уверенные.
 - **`gz sim` падает SIGSEGV на старте (ТОЛЬКО симуляция):** баг gz-transport discovery на WSL —
   `export GZ_IP=127.0.0.1` перед запуском + `pkill -9 -f 'gz sim'; pkill -9 -f ruby`. На железе Gazebo нет.
 - **Карта не приходит в VLM (`map=no` в логе):** нет паблишера `/map` (RTAB-Map не поднят на edge) или

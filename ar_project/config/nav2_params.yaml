@@ -61,8 +61,11 @@ controller_server:
     general_goal_checker:
       stateful: True
       plugin: "nav2_controller::SimpleGoalChecker"
-      xy_goal_tolerance: 0.10
-      yaw_goal_tolerance: 0.15
+      # Hardware VLM mode uses edge RTAB-Map over Wi-Fi/zenoh, so map->odom is
+      # less smooth than onboard SLAM. Accept a practical approach pose instead
+      # of making the robot spin in place to satisfy centimeter/degree precision.
+      xy_goal_tolerance: 0.20
+      yaw_goal_tolerance: 0.35
     # DWB parameters
     FollowPath:
       plugin: "dwb_core::DWBLocalPlanner"
@@ -95,7 +98,7 @@ controller_server:
       # converting from odom to map") and EVERY navigate goal aborted. 1.0 s
       # comfortably bridges the slow SLAM TF (harmless on a 0.26 m/s platform).
       transform_tolerance: 1.0
-      xy_goal_tolerance: 0.10
+      xy_goal_tolerance: 0.20
       trans_stopped_velocity: 0.25
       short_circuit_trajectory_evaluation: True
       stateful: True

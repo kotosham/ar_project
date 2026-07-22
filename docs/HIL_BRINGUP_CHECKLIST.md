@@ -72,7 +72,8 @@
       `VLM_API_KEY`/`VLM_MODEL`; старт миссии — `/vlm_mission`). Подтвердите, что цикл наблюдение →
       `DRIVE_TO_VISIBLE(mark_id)` / `DRIVE_FORWARD` / `TURN` / `DETECT_ALL` → `DONE` управляет роботом.
 - [ ] Команды и параметры запуска — `RUNBOOK.md` §4a/§4c. Цель — **чистый лейбл** (`bus`, не `find a bus`);
-      на старте полезно `-p async_replan:=false -p detect_conf:=0.5`. Если эндпоинт таймаутит (→ DEGRADED) —
+      на старте полезно `-p async_replan:=false` + дипломные split-пороги из RUNBOOK
+      (`target_detect_conf:=0.50`, `detect_all_conf:=0.12`). Если эндпоинт таймаутит (→ DEGRADED) —
       `-p send_map:=false` / выше `vlm_timeout_s`.
 
 ## I. Полевая деградация — проверки ROADMAP 6.6 (+ живые 5.1/5.4 на железе)
