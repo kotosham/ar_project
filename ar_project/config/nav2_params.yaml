@@ -160,7 +160,13 @@ global_costmap:
   global_costmap:
     ros__parameters:
       update_frequency: 2.0
-      publish_frequency: 1.0
+      # The published /global_costmap/costmap topic is VIZ-ONLY (planner_server
+      # uses the costmap in-process). On hardware this topic crosses Wi-Fi to
+      # RViz on the edge, and a full 40x40 m @0.05 grid is ~640 kB per publish.
+      # 0.0 disables the publisher entirely (no functional impact on planning).
+      # For RViz on the edge, bump to 0.5 -- always_send_full_costmap:False below
+      # then sends cheap incremental updates instead of the whole grid.
+      publish_frequency: 0.0
       global_frame: map
       robot_base_frame: base_link
       use_sim_time: False
@@ -180,7 +186,10 @@ global_costmap:
         plugin: "nav2_costmap_2d::InflationLayer"
         cost_scaling_factor: 3.0
         inflation_radius: 0.55
-      always_send_full_costmap: True
+      # Send incremental costmap updates, not the full grid, whenever the global
+      # costmap topic IS published (see publish_frequency above). Halves-to-tiny
+      # the per-message size over Wi-Fi when viewing in RViz.
+      always_send_full_costmap: False
 
 map_server:
   ros__parameters:

@@ -120,6 +120,39 @@ Edge-детектор масштабирует RGB-координаты в depth
 Если нужно вернуться к старому профилю, запусти этот же launch без аргументов
 или явно задай `640x480x15` / `424x240x15`.
 
+**Pi T2a — сжатие камеры (Level-0, сразу после старта камеры)**
+
+Единственный сжатый поток камеры через Wi-Fi кодируется плагинами `image_transport`
+**внутри узла RealSense на Pi**. Два параметра публикатора решают почти всё:
+
+- `compressedDepth.format = rvl` (вместо `png`) — PNG-кодирование 16-битной глубины
+  это самая дорогая CPU-операция всего камерного тракта на малинке; RVL сделан под
+  depth и радикально дешевле;
+- `compressed.jpeg_quality = 75` (вместо 95) — примерно вдвое меньше байт цвета в
+  эфир, на YOLOE/DINO/VLM при 640×480 не влияет.
+
+Это параметры `image_transport`, а не RealSense, поэтому задаются в рантайме (rs_launch
+не пробрасывает произвольные имена параметров). Применяются со следующего кадра и
+мгновенно откатываются:
+
+```bash
+# применить (узел по умолчанию /camera/camera):
+bash ~/ros2_ws/src/ar_project/deploy/tune_camera_compression.sh
+# откатить к дефолтам:
+bash ~/ros2_ws/src/ar_project/deploy/tune_camera_compression.sh /camera/camera revert
+```
+
+Скрипт сам находит точные имена параметров через `ros2 param list` (не зависит от
+namespace). Проверить имена вручную:
+
+```bash
+ros2 param list /camera/camera | grep -iE 'compressedDepth|jpeg_quality'
+```
+
+Параметры `compressedDepth.*` объявляются лениво — только когда на топик подпишется
+потребитель compressedDepth (edge-relay). Если скрипт пишет «no compressedDepth.format
+param found», сначала подними `edge_camera_relay` на edge, затем запусти скрипт снова.
+
 **Pi T3 — map->odom correction relay, запускать до Nav2**
 
 ```bash
@@ -209,6 +242,11 @@ source ~/ros2_ws/src/ar_project/deploy/transport/transport_env.sh
 В `hybrid_dino_yoloe` конкретная цель (`chair`, `office chair`, `bus`) детектируется через
 GroundingDINO+MobileSAM, а `DETECT_ALL` остается на YOLOE broad-vocab, чтобы обзор сцены не
 становился слишком тяжелым.
+YOLOE в hybrid-режиме грузится **лениво** — только при первом `DETECT_ALL` (в логе старта
+`vocab_backend=yoloe (lazy)`), поэтому миссия без `DETECT_ALL` не тратит на него VRAM и время
+старта. Первый `DETECT_ALL` в свежем процессе детектора платит разовую загрузку (~2–4 с);
+если он из-за этого разово упрётся в `detect_timeout_s`, модель всё равно останется в памяти
+и следующий вызов отработает штатно (при желании поднять `detect_timeout_s` для первого вызова).
 `depth_point_strategy:=nearest_mask` означает, что пиксель для `DRIVE_TO_VISIBLE` выбирается
 по ближайшей валидной глубине внутри маски объекта, а не по геометрическому центру маски.
 
