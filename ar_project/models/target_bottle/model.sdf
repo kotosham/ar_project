@@ -1,0 +1,57 @@
+<?xml version="1.0"?>
+<!--
+  target_bottle - the "bottle" search target. Used by the multi-object /
+  distractor scenarios where the mission names one vocab word and a second,
+  similarly sized object of a different colour sits nearby, so a run that ends
+  on the wrong object is scored as a semantic failure rather than a nav failure.
+
+  WHY IT LOOKS LIKE THIS:
+  * static=true - a target that can be pushed makes the oracle subgoal
+    (near_xy at a fixed pose) meaningless; episodes must be reproducible.
+  * my_bot's camera_link is at z = 0.13 m and the vertical half-angle is only
+    24.3 deg, so at 2 m the frame covers 0.00 .. 1.03 m. A 27 cm tall bottle
+    standing on the floor therefore fills a useful slice of the image; anything
+    put on a table top would leave the frame at close range.
+  * Body + narrower neck as two cylinders: the neck is the shape cue the
+    open-vocab detector needs to emit "bottle" instead of "cup"/"vase".
+  * Bright GREEN, chosen to be maximally distinct from the red cup so a
+    320x240 image still separates them under the camera perturbations.
+-->
+<sdf version="1.7">
+  <model name="target_bottle">
+    <static>true</static>
+    <link name="link">
+
+      <!-- Body: r 0.035, h 0.20, centred z 0.10 -> sits flat on the floor. -->
+      <visual name="body_visual">
+        <pose>0 0 0.10 0 0 0</pose>
+        <geometry><cylinder><radius>0.035</radius><length>0.20</length></cylinder></geometry>
+        <material>
+          <ambient>0.05 0.70 0.12 1</ambient>
+          <diffuse>0.06 0.90 0.15 1</diffuse>
+          <specular>0.20 0.20 0.20 1</specular>
+        </material>
+      </visual>
+      <collision name="body_collision">
+        <pose>0 0 0.10 0 0 0</pose>
+        <geometry><cylinder><radius>0.035</radius><length>0.20</length></cylinder></geometry>
+      </collision>
+
+      <!-- Neck: r 0.015, h 0.07, centred z 0.235 (sits on top of the body). -->
+      <visual name="neck_visual">
+        <pose>0 0 0.235 0 0 0</pose>
+        <geometry><cylinder><radius>0.015</radius><length>0.07</length></cylinder></geometry>
+        <material>
+          <ambient>0.05 0.70 0.12 1</ambient>
+          <diffuse>0.06 0.90 0.15 1</diffuse>
+          <specular>0.20 0.20 0.20 1</specular>
+        </material>
+      </visual>
+      <collision name="neck_collision">
+        <pose>0 0 0.235 0 0 0</pose>
+        <geometry><cylinder><radius>0.015</radius><length>0.07</length></cylinder></geometry>
+      </collision>
+
+    </link>
+  </model>
+</sdf>

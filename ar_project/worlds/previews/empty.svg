@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" role="img" viewBox="0 0 400.0 464.0" width="400" height="464" font-family="DejaVu Sans, Segoe UI, sans-serif">
+<title>Пустая площадка</title>
+<rect x="0" y="0" width="400.0" height="464.0" fill="#101418"/>
+<g><line x1="0.0" y1="34.0" x2="0.0" y2="434.0" stroke="#2a333c" stroke-width="1"/><line x1="40.0" y1="34.0" x2="40.0" y2="434.0" stroke="#1e262e" stroke-width="1"/><line x1="80.0" y1="34.0" x2="80.0" y2="434.0" stroke="#1e262e" stroke-width="1"/><line x1="120.0" y1="34.0" x2="120.0" y2="434.0" stroke="#1e262e" stroke-width="1"/><line x1="160.0" y1="34.0" x2="160.0" y2="434.0" stroke="#1e262e" stroke-width="1"/><line x1="200.0" y1="34.0" x2="200.0" y2="434.0" stroke="#2a333c" stroke-width="1"/><line x1="240.0" y1="34.0" x2="240.0" y2="434.0" stroke="#1e262e" stroke-width="1"/><line x1="280.0" y1="34.0" x2="280.0" y2="434.0" stroke="#1e262e" stroke-width="1"/><line x1="320.0" y1="34.0" x2="320.0" y2="434.0" stroke="#1e262e" stroke-width="1"/><line x1="360.0" y1="34.0" x2="360.0" y2="434.0" stroke="#1e262e" stroke-width="1"/><line x1="400.0" y1="34.0" x2="400.0" y2="434.0" stroke="#2a333c" stroke-width="1"/><line x1="0.0" y1="434.0" x2="400.0" y2="434.0" stroke="#2a333c" stroke-width="1"/><line x1="0.0" y1="394.0" x2="400.0" y2="394.0" stroke="#1e262e" stroke-width="1"/><line x1="0.0" y1="354.0" x2="400.0" y2="354.0" stroke="#1e262e" stroke-width="1"/><line x1="0.0" y1="314.0" x2="400.0" y2="314.0" stroke="#1e262e" stroke-width="1"/><line x1="0.0" y1="274.0" x2="400.0" y2="274.0" stroke="#1e262e" stroke-width="1"/><line x1="0.0" y1="234.0" x2="400.0" y2="234.0" stroke="#2a333c" stroke-width="1"/><line x1="0.0" y1="194.0" x2="400.0" y2="194.0" stroke="#1e262e" stroke-width="1"/><line x1="0.0" y1="154.0" x2="400.0" y2="154.0" stroke="#1e262e" stroke-width="1"/><line x1="0.0" y1="114.0" x2="400.0" y2="114.0" stroke="#1e262e" stroke-width="1"/><line x1="0.0" y1="74.0" x2="400.0" y2="74.0" stroke="#1e262e" stroke-width="1"/><line x1="0.0" y1="34.0" x2="400.0" y2="34.0" stroke="#2a333c" stroke-width="1"/></g>
+<polygon points="211.0,234.0 194.4,229.8 194.4,238.2" fill="#33c06e" stroke="#0c0f12" stroke-width="1"/>
+<text x="200.0" y="254.0" fill="#33c06e" font-size="10" text-anchor="middle">старт</text>
+<text x="10" y="20" fill="#dbe4ec" font-size="13">Пустая площадка</text>
+<text x="390.0" y="20" fill="#8a949e" font-size="10" text-anchor="end">world name: default</text>
+<g stroke="#8a949e" stroke-width="1.5" fill="none"><line x1="354.0" y1="68.0" x2="354.0" y2="44.0"/><line x1="354.0" y1="68.0" x2="378.0" y2="68.0"/></g>
+<text x="354.0" y="40.0" fill="#8a949e" font-size="9" text-anchor="middle">+Y</text>
+<text x="381.0" y="71.0" fill="#8a949e" font-size="9">+X</text>
+<line x1="10" y1="450.0" x2="50.0" y2="450.0" stroke="#dbe4ec" stroke-width="2"/>
+<line x1="10" y1="446.0" x2="10" y2="454.0" stroke="#dbe4ec" stroke-width="2"/>
+<line x1="50.0" y1="446.0" x2="50.0" y2="454.0" stroke="#dbe4ec" stroke-width="2"/>
+<text x="54.0" y="454.0" fill="#dbe4ec" font-size="10">1 м</text>
+<text x="390.0" y="454.0" fill="#8a949e" font-size="10" text-anchor="end">10 x 10 м, вид сверху</text>
+</svg>

@@ -1,0 +1,40 @@
+<?xml version="1.0"?>
+<!--
+  target_towel - the "towel" target for the semantic-room scenarios (s6: "find
+  the towel" with no towel visible from the hallway, so the planner has to infer
+  BATHROOM from the toilet/tub/sink cues and go look there). It is also the
+  target hidden behind occluder_screen in the occlusion scenarios.
+
+  WHY IT LOOKS LIKE THIS:
+  * static=true - the towel marks the goal region for a near_xy subgoal; if the
+    robot could shove it the episode would stop being reproducible.
+  * A thin upright slab 0.30 (x) x 0.06 (y) x 0.40 (z) centred at z = 0.20, i.e.
+    a towel "hanging" from floor to 0.40 m. my_bot's camera_link is at z = 0.13 m
+    with a 48.5 deg vertical FOV, so at 1 m the frame only spans 0.00 .. 0.58 m -
+    a towel on a real wall rail at 1.2 m would simply never enter the image.
+    Everything in this benchmark is deliberately low for that reason.
+  * Bright YELLOW: cloth has no shape cue at 320x240, so colour has to carry the
+    detection, and yellow is the remaining channel not used by cup/bottle/ball.
+-->
+<sdf version="1.7">
+  <model name="target_towel">
+    <static>true</static>
+    <link name="link">
+
+      <visual name="visual">
+        <pose>0 0 0.20 0 0 0</pose>
+        <geometry><box><size>0.30 0.06 0.40</size></box></geometry>
+        <material>
+          <ambient>0.90 0.85 0.08 1</ambient>
+          <diffuse>1.00 0.92 0.10 1</diffuse>
+          <specular>0.15 0.15 0.15 1</specular>
+        </material>
+      </visual>
+      <collision name="collision">
+        <pose>0 0 0.20 0 0 0</pose>
+        <geometry><box><size>0.30 0.06 0.40</size></box></geometry>
+      </collision>
+
+    </link>
+  </model>
+</sdf>

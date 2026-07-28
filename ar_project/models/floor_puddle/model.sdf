@@ -1,0 +1,58 @@
+<?xml version="1.0"?>
+<!--
+  floor_puddle - the "loss of traction" disturbance, the twin of floor_carpet.
+  Scenarios lay it across a hallway lane or a doorway so the robot drives onto a
+  slick patch mid-mission and the wheel odometry silently diverges from ground
+  truth; the scenario then checks whether the planner notices and recovers.
+
+  WHY IT LOOKS LIKE THIS:
+  * static=true - the patch is part of the environment definition and must be at
+    the same place in every run for the episode to be reproducible.
+  * IMPORTANT - here the disturbance is the FRICTION, not the geometry. The slab
+    is only 0.004 m thick (centre z 0.002), effectively flush with the floor, so
+    there is nothing to climb; what makes the wheels spin and the robot skate is
+    the ODE mu = mu2 = 0.02 declared inside the collision. That is the exact
+    mirror image of floor_carpet, where the 2 cm lip is the disturbance and the
+    high mu is incidental.
+  * BLUE-GREY with alpha 0.6 in both <ambient> and <diffuse> so it renders as a
+    semi-transparent wet sheen. It has to be recognisable in a 320x240 frame from
+    a camera at only z = 0.13 m, which is why the tint is this strong - a physically
+    faithful, nearly clear puddle would be invisible at that resolution.
+-->
+<sdf version="1.7">
+  <model name="floor_puddle">
+    <static>true</static>
+    <link name="link">
+
+      <visual name="visual">
+        <pose>0 0 0.002 0 0 0</pose>
+        <geometry><box><size>1.40 1.20 0.004</size></box></geometry>
+        <material>
+          <ambient>0.15 0.25 0.35 0.6</ambient>
+          <diffuse>0.15 0.25 0.35 0.6</diffuse>
+          <specular>0.40 0.40 0.40 1</specular>
+        </material>
+      </visual>
+
+      <collision name="collision">
+        <pose>0 0 0.002 0 0 0</pose>
+        <geometry><box><size>1.40 1.20 0.004</size></box></geometry>
+        <!--
+          Friction lives here, inside the collision, so ODE actually applies it.
+          mu 0.02 IS the disturbance: the 4 mm slab is flush with the floor, so
+          nothing is climbed - the wheels simply lose grip and slip. Compare
+          floor_carpet, where the 2 cm lip is the disturbance instead.
+        -->
+        <surface>
+          <friction>
+            <ode>
+              <mu>0.02</mu>
+              <mu2>0.02</mu2>
+            </ode>
+          </friction>
+        </surface>
+      </collision>
+
+    </link>
+  </model>
+</sdf>

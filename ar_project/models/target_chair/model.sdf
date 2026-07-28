@@ -1,0 +1,116 @@
+<?xml version="1.0"?>
+<!--
+  target_chair - the long-range target for s1_far_target.
+
+  WHY A CHAIR AND NOT ONE OF THE SMALL PROPS:
+  s1 puts the target ~12.6 m down the hallway, i.e. far beyond the 8 m depth/scan
+  range but well inside the 30 m RGB clip. That only produces a usable scenario if
+  the object still occupies enough PIXELS to be seen at that range. At 12.6 m the
+  camera covers ~15.1 m horizontally and ~11.4 m vertically, so at 640x480 the
+  scale is ~42 px/m:
+      target_cup   (0.09 m)  ->  ~4 px    invisible, the scenario would be a lie
+      target_ball  (0.22 m)  ->  ~9 px    a smudge
+      target_chair (0.42 m wide, 0.85 m tall) -> ~18 x 36 px   actually detectable
+  "chair" is also a first-class label for both YOLOE and the DINO vocabulary, so
+  the mission string needs no special casing.
+
+  static=true like every other benchmark prop: a chair that could be nudged would
+  make the episode non-reproducible, and s1 measures approach decomposition, not
+  contact dynamics.
+
+  Bright teal on purpose - the house walls are warm/neutral, so the target stays
+  separable from the background even under the p_dark_room perturbation.
+-->
+<sdf version="1.7">
+  <model name="target_chair">
+    <static>true</static>
+    <link name="link">
+
+      <!-- Seat pan: top face at z = 0.475. -->
+      <visual name="seat_visual">
+        <pose>0 0 0.45 0 0 0</pose>
+        <geometry><box><size>0.42 0.42 0.05</size></box></geometry>
+        <material>
+          <ambient>0.05 0.35 0.38 1</ambient>
+          <diffuse>0.10 0.65 0.70 1</diffuse>
+          <specular>0.10 0.10 0.10 1</specular>
+        </material>
+      </visual>
+      <collision name="seat_collision">
+        <pose>0 0 0.45 0 0 0</pose>
+        <geometry><box><size>0.42 0.42 0.05</size></box></geometry>
+      </collision>
+
+      <!-- Backrest on the -Y side, top edge at z = 0.87. This is the tall silhouette
+           that makes the chair readable at 12 m. -->
+      <visual name="back_visual">
+        <pose>0 -0.185 0.67 0 0 0</pose>
+        <geometry><box><size>0.42 0.05 0.40</size></box></geometry>
+        <material>
+          <ambient>0.05 0.35 0.38 1</ambient>
+          <diffuse>0.10 0.65 0.70 1</diffuse>
+          <specular>0.10 0.10 0.10 1</specular>
+        </material>
+      </visual>
+      <collision name="back_collision">
+        <pose>0 -0.185 0.67 0 0 0</pose>
+        <geometry><box><size>0.42 0.05 0.40</size></box></geometry>
+      </collision>
+
+      <!-- Four legs. Kept as separate boxes rather than one skirt so /scan returns a
+           chair-like sparse footprint instead of a solid block. -->
+      <visual name="leg_fl_visual">
+        <pose>0.18 0.18 0.2125 0 0 0</pose>
+        <geometry><box><size>0.04 0.04 0.425</size></box></geometry>
+        <material>
+          <ambient>0.04 0.22 0.24 1</ambient>
+          <diffuse>0.08 0.45 0.48 1</diffuse>
+        </material>
+      </visual>
+      <collision name="leg_fl_collision">
+        <pose>0.18 0.18 0.2125 0 0 0</pose>
+        <geometry><box><size>0.04 0.04 0.425</size></box></geometry>
+      </collision>
+
+      <visual name="leg_fr_visual">
+        <pose>0.18 -0.18 0.2125 0 0 0</pose>
+        <geometry><box><size>0.04 0.04 0.425</size></box></geometry>
+        <material>
+          <ambient>0.04 0.22 0.24 1</ambient>
+          <diffuse>0.08 0.45 0.48 1</diffuse>
+        </material>
+      </visual>
+      <collision name="leg_fr_collision">
+        <pose>0.18 -0.18 0.2125 0 0 0</pose>
+        <geometry><box><size>0.04 0.04 0.425</size></box></geometry>
+      </collision>
+
+      <visual name="leg_bl_visual">
+        <pose>-0.18 0.18 0.2125 0 0 0</pose>
+        <geometry><box><size>0.04 0.04 0.425</size></box></geometry>
+        <material>
+          <ambient>0.04 0.22 0.24 1</ambient>
+          <diffuse>0.08 0.45 0.48 1</diffuse>
+        </material>
+      </visual>
+      <collision name="leg_bl_collision">
+        <pose>-0.18 0.18 0.2125 0 0 0</pose>
+        <geometry><box><size>0.04 0.04 0.425</size></box></geometry>
+      </collision>
+
+      <visual name="leg_br_visual">
+        <pose>-0.18 -0.18 0.2125 0 0 0</pose>
+        <geometry><box><size>0.04 0.04 0.425</size></box></geometry>
+        <material>
+          <ambient>0.04 0.22 0.24 1</ambient>
+          <diffuse>0.08 0.45 0.48 1</diffuse>
+        </material>
+      </visual>
+      <collision name="leg_br_collision">
+        <pose>-0.18 -0.18 0.2125 0 0 0</pose>
+        <geometry><box><size>0.04 0.04 0.425</size></box></geometry>
+      </collision>
+
+    </link>
+  </model>
+</sdf>

@@ -1,0 +1,94 @@
+<?xml version="1.0"?>
+<!--
+  sign_cup_kitchen - the instruction sign for the "read the sign, then act"
+  scenario: the cup is NOT in the room the robot starts in, and the only way to
+  know where it is, is to drive up to this board and read
+  "КРУЖКА - НА КУХНЕ / CUP -> KITCHEN". It turns a blind search into a
+  multi_step_decomposition test (read -> infer room -> navigate -> detect).
+
+  BOARD SIZE IS 1.00 x 0.56 m, NOT 1.60 x 0.90 - AND THAT IS LOAD-BEARING:
+  the hallway is 2.2 m wide and the sign has to be angled -25 deg to face an
+  approaching robot, so it eats into the corridor. Its x-footprint then has to
+  clear BOTH the bedroom doorway (x -4.60..-3.50) and the bathroom doorway
+  (x -0.55..0.55), and the robot needs ~2.4 m of straight approach to bring the
+  whole board inside a 62 deg FOV. Measured in the sim: a 1.60 m board leaves a
+  legal window of exactly 1.47 m between those doorways - room for ONE sign, and
+  the first render had the board sliced off by the frame edge (true bearing 32
+  deg vs a 31.2 deg half-FOV). At 1.00 m the legal window is 2.03 m and two
+  boards fit, which is what s5 needs (route marker + distractor).
+
+  WHY IT LOOKS LIKE THIS (shared by all four sign_* models):
+  * static=true - the sign is part of the scenario definition; a board that
+    could be knocked over would make runs non-reproducible.
+  * Board 1.00 (x) x 0.05 (y) x 0.56 (z) with its CENTRE at z = 0.55, i.e. it
+    spans 0.27 .. 0.83 m. my_bot's camera_link is at z = 0.13 m with a 48.5 deg
+    vertical FOV, so at 2 m the frame only covers 0.00 .. 1.03 m - a sign hung at
+    human eye level would be entirely above the image. This board is low on
+    purpose so the whole printed face lands inside a 320x240 frame at 2 m.
+  * Two 0.06 x 0.06 x 0.27 legs at x = +/-0.40 hold the board's bottom edge at
+    0.27 m and give /scan a real footprint instead of a floating slab.
+  * Un-rotated the printed face looks toward -Y; scenarios place it with yaw.
+  * ambient/diffuse are forced to 1 1 1 1 and the PBR metal is
+    metalness 0 / roughness 1 so the texture is neither darkened nor made shiny -
+    black-on-white text has to survive the "lights off" perturbation.
+  * The <collision> is the plain box; only the <visual> carries the albedo_map.
+-->
+<sdf version="1.7">
+  <model name="sign_cup_kitchen">
+    <static>true</static>
+    <link name="link">
+
+      <!-- Printed board: face looks toward -Y when yaw = 0. -->
+      <visual name="board_visual">
+        <pose>0 0 0.55 0 0 0</pose>
+        <geometry><box><size>1.00 0.05 0.56</size></box></geometry>
+        <material>
+          <ambient>1 1 1 1</ambient>
+          <diffuse>1 1 1 1</diffuse>
+          <pbr>
+            <metal>
+              <albedo_map>materials/textures/sign_cup_kitchen.png</albedo_map>
+              <metalness>0.0</metalness>
+              <roughness>1.0</roughness>
+            </metal>
+          </pbr>
+        </material>
+      </visual>
+      <collision name="board_collision">
+        <pose>0 0 0.55 0 0 0</pose>
+        <geometry><box><size>1.00 0.05 0.56</size></box></geometry>
+      </collision>
+
+      <!-- Left leg. -->
+      <visual name="leg_left_visual">
+        <pose>-0.40 0 0.135 0 0 0</pose>
+        <geometry><box><size>0.06 0.06 0.27</size></box></geometry>
+        <material>
+          <ambient>0.20 0.20 0.22 1</ambient>
+          <diffuse>0.28 0.28 0.30 1</diffuse>
+          <specular>0.05 0.05 0.05 1</specular>
+        </material>
+      </visual>
+      <collision name="leg_left_collision">
+        <pose>-0.40 0 0.135 0 0 0</pose>
+        <geometry><box><size>0.06 0.06 0.27</size></box></geometry>
+      </collision>
+
+      <!-- Right leg. -->
+      <visual name="leg_right_visual">
+        <pose>0.40 0 0.135 0 0 0</pose>
+        <geometry><box><size>0.06 0.06 0.27</size></box></geometry>
+        <material>
+          <ambient>0.20 0.20 0.22 1</ambient>
+          <diffuse>0.28 0.28 0.30 1</diffuse>
+          <specular>0.05 0.05 0.05 1</specular>
+        </material>
+      </visual>
+      <collision name="leg_right_collision">
+        <pose>0.40 0 0.135 0 0 0</pose>
+        <geometry><box><size>0.06 0.06 0.27</size></box></geometry>
+      </collision>
+
+    </link>
+  </model>
+</sdf>

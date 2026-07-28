@@ -3,6 +3,19 @@
 
     <xacro:arg name="use_ros2_control" default="true"/>
 
+    <!-- Sim camera tuning, consumed by camera_gazebo_sensors.xacro.
+         Declared here (the only root that includes the gz sensor block) so every
+         existing caller keeps working without passing anything.
+         All defaults reproduce the historic hard-coded values EXCEPT cam_far,
+         which was raised 8.0 -> 30.0: RGB and depth used to share one 8 m clip,
+         which is physically wrong and removed the "seen in colour, invisible to
+         depth/lidar" case. depth_far stays 8.0 so /scan is unchanged. -->
+    <xacro:arg name="cam_width"  default="320"/>
+    <xacro:arg name="cam_height" default="240"/>
+    <xacro:arg name="cam_rate"   default="15"/>
+    <xacro:arg name="cam_far"    default="30.0"/>
+    <xacro:arg name="depth_far"  default="8.0"/>
+
     <xacro:include filename="robot_core.xacro"/>
     <xacro:if value="$(arg use_ros2_control)">
         <xacro:include filename="ros2_control.xacro"/>

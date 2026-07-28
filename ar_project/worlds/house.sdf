@@ -1,0 +1,999 @@
+<!--
+  house.sdf - the 15 x 10 m six-room apartment used by the VLM navigation scenarios.
+
+  WHY THIS WORLD EXISTS
+  The scenario runner addresses Gazebo services as /world/house/*, so <world name>
+  MUST stay exactly "house". Room AABBs below are duplicated inside the runner's
+  in_room predicate - moving a wall here silently breaks those predicates.
+
+  LAYOUT (metres, floor spans x [-7.5, 7.5], y [-5.0, 5.0], no ceiling)
+
+        y=+5.0  +===============================================+
+                |  BEDROOM   |    BATHROOM    |     KITCHEN      |
+                |            x=-2.0        x=+2.0                |
+        y=+1.1  +===[door]===+=====[door]=====+=====[door]=======+
+                |                 HALLWAY  (14.8 m sightline)    |
+        y=-1.1  +===[door]===+===============[door]==============+
+                |  STORAGE   |             LIVING                |
+                |            x=-2.0                              |
+        y=-5.0  +===============================================+
+                x=-7.5                                      x=+7.5
+
+  Exterior wall thickness 0.15, interior 0.12, wall height 2.2 everywhere.
+  Doorways are NOT modelled as frames - the wall is simply built as several box
+  segments with the gap left empty, so the robot drives straight through.
+
+  Every static model carries BOTH a <collision> and a <visual> with identical
+  geometry: the depth camera renders the visual while /scan and the physics
+  contact solver use the collision, and a mismatch would make obstacles that the
+  robot sees but cannot hit (or worse, the reverse).
+-->
+<sdf version='1.7'>
+  <world name='house'>
+
+    <!-- ==========================================================
+         PHYSICS / PLUGINS
+         Same plugin set as the other worlds in worlds/*.world. The Sensors
+         system needs an explicit ogre2 engine or the RGB+depth cameras come
+         up black under WSLg software rendering.
+         ========================================================== -->
+    <physics name='default_physics' type='ode'>
+      <max_step_size>0.001</max_step_size>
+      <real_time_factor>1</real_time_factor>
+      <real_time_update_rate>1000</real_time_update_rate>
+    </physics>
+
+    <plugin filename='gz-sim-physics-system' name='gz::sim::systems::Physics'/>
+    <plugin filename='gz-sim-user-commands-system' name='gz::sim::systems::UserCommands'/>
+    <plugin filename='gz-sim-scene-broadcaster-system' name='gz::sim::systems::SceneBroadcaster'/>
+    <plugin filename='gz-sim-sensors-system' name='gz::sim::systems::Sensors'>
+      <render_engine>ogre2</render_engine>
+    </plugin>
+
+    <gravity>0 0 -9.8</gravity>
+    <magnetic_field>6e-06 2.3e-05 -4.2e-05</magnetic_field>
+    <atmosphere type='adiabatic'/>
+
+    <!-- Ambient is deliberately low (0.30) so that switching a room's point
+         light off via /world/house/light_config produces a visibly dark room
+         instead of a barely-dimmed one. Shadows are off: they cost a lot under
+         software rendering and would add fake dark blobs the detector reads as
+         objects. -->
+    <scene>
+      <ambient>0.16 0.16 0.18 1</ambient>
+      <background>0.10 0.10 0.12 1</background>
+      <shadows>false</shadows>
+    </scene>
+
+    <!-- ==========================================================
+         GROUND PLANE
+         Grey, high friction (mu 100 / mu2 50) so the diff-drive wheels do not
+         slip - the floor_puddle prop is what introduces slip, on purpose.
+         ========================================================== -->
+    <model name='ground_plane'>
+      <static>true</static>
+      <link name='link'>
+        <collision name='collision'>
+          <geometry>
+            <plane>
+              <normal>0 0 1</normal>
+              <size>100 100</size>
+            </plane>
+          </geometry>
+          <surface>
+            <contact>
+              <collide_bitmask>65535</collide_bitmask>
+              <ode/>
+            </contact>
+            <friction>
+              <ode>
+                <mu>100</mu>
+                <mu2>50</mu2>
+              </ode>
+              <torsional>
+                <ode/>
+              </torsional>
+            </friction>
+            <bounce/>
+          </surface>
+          <max_contacts>10</max_contacts>
+        </collision>
+        <visual name='visual'>
+          <cast_shadows>0</cast_shadows>
+          <geometry>
+            <plane>
+              <normal>0 0 1</normal>
+              <size>100 100</size>
+            </plane>
+          </geometry>
+          <material>
+            <ambient>0.35 0.35 0.36 1</ambient>
+            <diffuse>0.50 0.50 0.52 1</diffuse>
+            <specular>0.05 0.05 0.05 1</specular>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- ==========================================================
+         EXTERIOR WALLS
+         Centrelines at x = +-7.5 and y = +-5.0, thickness 0.15, height 2.2.
+         Lengths are overrun by one thickness so the four corners are sealed -
+         a 1 cm corner leak is enough for the laser scan to shoot outside and
+         report bogus far-range returns.
+         Warm off-white so the white bathroom fixtures still read as "white"
+         against them.
+         ========================================================== -->
+    <model name='wall_ext_west'>
+      <static>true</static>
+      <pose>-7.5 0 1.1 0 0 0</pose>
+      <link name='link'>
+        <collision name='collision'>
+          <geometry><box><size>0.15 10.15 2.2</size></box></geometry>
+        </collision>
+        <visual name='visual'>
+          <geometry><box><size>0.15 10.15 2.2</size></box></geometry>
+          <material>
+            <ambient>0.26 0.25 0.22 1</ambient>
+            <diffuse>0.58 0.55 0.50 1</diffuse>
+            <specular>0.05 0.05 0.05 1</specular>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <model name='wall_ext_east'>
+      <static>true</static>
+      <pose>7.5 0 1.1 0 0 0</pose>
+      <link name='link'>
+        <collision name='collision'>
+          <geometry><box><size>0.15 10.15 2.2</size></box></geometry>
+        </collision>
+        <visual name='visual'>
+          <geometry><box><size>0.15 10.15 2.2</size></box></geometry>
+          <material>
+            <ambient>0.26 0.25 0.22 1</ambient>
+            <diffuse>0.58 0.55 0.50 1</diffuse>
+            <specular>0.05 0.05 0.05 1</specular>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <model name='wall_ext_north'>
+      <static>true</static>
+      <pose>0 5.0 1.1 0 0 0</pose>
+      <link name='link'>
+        <collision name='collision'>
+          <geometry><box><size>15.15 0.15 2.2</size></box></geometry>
+        </collision>
+        <visual name='visual'>
+          <geometry><box><size>15.15 0.15 2.2</size></box></geometry>
+          <material>
+            <ambient>0.26 0.25 0.22 1</ambient>
+            <diffuse>0.58 0.55 0.50 1</diffuse>
+            <specular>0.05 0.05 0.05 1</specular>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <model name='wall_ext_south'>
+      <static>true</static>
+      <pose>0 -5.0 1.1 0 0 0</pose>
+      <link name='link'>
+        <collision name='collision'>
+          <geometry><box><size>15.15 0.15 2.2</size></box></geometry>
+        </collision>
+        <visual name='visual'>
+          <geometry><box><size>15.15 0.15 2.2</size></box></geometry>
+          <material>
+            <ambient>0.26 0.25 0.22 1</ambient>
+            <diffuse>0.58 0.55 0.50 1</diffuse>
+            <specular>0.05 0.05 0.05 1</specular>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- ==========================================================
+         HALLWAY WALLS - NORTH SIDE (y = +1.1), thickness 0.12
+         One continuous wall from x=-7.5 to x=+7.5 broken into FOUR segments by
+         three doorways. Gaps (left empty on purpose):
+             bedroom  door  x [-4.60, -3.50]   (1.10 m)
+             bathroom door  x [-0.55, +0.55]   (1.10 m)
+             kitchen  door  x [+3.60, +4.70]   (1.10 m)
+         Every gap is >= 1.10 m against a ~0.40 x 0.35 m robot footprint, i.e.
+         ~0.35 m clearance per side even with a badly aligned approach.
+         ========================================================== -->
+    <model name='wall_north_seg_w'>
+      <!-- x -7.50 .. -4.60 : west of the bedroom door -->
+      <static>true</static>
+      <pose>-6.05 1.1 1.1 0 0 0</pose>
+      <link name='link'>
+        <collision name='collision'>
+          <geometry><box><size>2.90 0.12 2.2</size></box></geometry>
+        </collision>
+        <visual name='visual'>
+          <geometry><box><size>2.90 0.12 2.2</size></box></geometry>
+          <material>
+            <ambient>0.26 0.25 0.22 1</ambient>
+            <diffuse>0.58 0.55 0.50 1</diffuse>
+            <specular>0.05 0.05 0.05 1</specular>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <model name='wall_north_seg_bedroom_bath'>
+      <!-- x -3.50 .. -0.55 : between the bedroom and bathroom doors -->
+      <static>true</static>
+      <pose>-2.025 1.1 1.1 0 0 0</pose>
+      <link name='link'>
+        <collision name='collision'>
+          <geometry><box><size>2.95 0.12 2.2</size></box></geometry>
+        </collision>
+        <visual name='visual'>
+          <geometry><box><size>2.95 0.12 2.2</size></box></geometry>
+          <material>
+            <ambient>0.26 0.25 0.22 1</ambient>
+            <diffuse>0.58 0.55 0.50 1</diffuse>
+            <specular>0.05 0.05 0.05 1</specular>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <model name='wall_north_seg_bath_kitchen'>
+      <!-- x +0.55 .. +3.60 : between the bathroom and kitchen doors -->
+      <static>true</static>
+      <pose>2.075 1.1 1.1 0 0 0</pose>
+      <link name='link'>
+        <collision name='collision'>
+          <geometry><box><size>3.05 0.12 2.2</size></box></geometry>
+        </collision>
+        <visual name='visual'>
+          <geometry><box><size>3.05 0.12 2.2</size></box></geometry>
+          <material>
+            <ambient>0.26 0.25 0.22 1</ambient>
+            <diffuse>0.58 0.55 0.50 1</diffuse>
+            <specular>0.05 0.05 0.05 1</specular>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <model name='wall_north_seg_e'>
+      <!-- x +4.70 .. +7.50 : east of the kitchen door -->
+      <static>true</static>
+      <pose>6.10 1.1 1.1 0 0 0</pose>
+      <link name='link'>
+        <collision name='collision'>
+          <geometry><box><size>2.80 0.12 2.2</size></box></geometry>
+        </collision>
+        <visual name='visual'>
+          <geometry><box><size>2.80 0.12 2.2</size></box></geometry>
+          <material>
+            <ambient>0.26 0.25 0.22 1</ambient>
+            <diffuse>0.58 0.55 0.50 1</diffuse>
+            <specular>0.05 0.05 0.05 1</specular>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- ==========================================================
+         HALLWAY WALLS - SOUTH SIDE (y = -1.1), thickness 0.12
+         THREE segments, two doorways:
+             storage door  x [-4.60, -3.50]   (1.10 m)
+             living  door  x [+2.40, +3.50]   (1.10 m)
+         The middle segment is the long 5.90 m stretch that keeps the hallway a
+         corridor rather than an open hall - that is what makes the 14.8 m
+         straight sightline the depth-gap scenarios rely on.
+         ========================================================== -->
+    <model name='wall_south_seg_w'>
+      <!-- x -7.50 .. -4.60 : west of the storage door -->
+      <static>true</static>
+      <pose>-6.05 -1.1 1.1 0 0 0</pose>
+      <link name='link'>
+        <collision name='collision'>
+          <geometry><box><size>2.90 0.12 2.2</size></box></geometry>
+        </collision>
+        <visual name='visual'>
+          <geometry><box><size>2.90 0.12 2.2</size></box></geometry>
+          <material>
+            <ambient>0.26 0.25 0.22 1</ambient>
+            <diffuse>0.58 0.55 0.50 1</diffuse>
+            <specular>0.05 0.05 0.05 1</specular>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <model name='wall_south_seg_mid'>
+      <!-- x -3.50 .. +2.40 : between the storage and living doors -->
+      <static>true</static>
+      <pose>-0.55 -1.1 1.1 0 0 0</pose>
+      <link name='link'>
+        <collision name='collision'>
+          <geometry><box><size>5.90 0.12 2.2</size></box></geometry>
+        </collision>
+        <visual name='visual'>
+          <geometry><box><size>5.90 0.12 2.2</size></box></geometry>
+          <material>
+            <ambient>0.26 0.25 0.22 1</ambient>
+            <diffuse>0.58 0.55 0.50 1</diffuse>
+            <specular>0.05 0.05 0.05 1</specular>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <model name='wall_south_seg_e'>
+      <!-- x +3.50 .. +7.50 : east of the living door -->
+      <static>true</static>
+      <pose>5.50 -1.1 1.1 0 0 0</pose>
+      <link name='link'>
+        <collision name='collision'>
+          <geometry><box><size>4.00 0.12 2.2</size></box></geometry>
+        </collision>
+        <visual name='visual'>
+          <geometry><box><size>4.00 0.12 2.2</size></box></geometry>
+          <material>
+            <ambient>0.26 0.25 0.22 1</ambient>
+            <diffuse>0.58 0.55 0.50 1</diffuse>
+            <specular>0.05 0.05 0.05 1</specular>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- ==========================================================
+         ROOM DIVIDERS (perpendicular, thickness 0.12)
+         These are solid - the only way between two rooms is out into the
+         hallway and back in through the other door. That forces the planner to
+         actually decompose "go to the kitchen" into hallway traversal rather
+         than cutting a diagonal.
+         ========================================================== -->
+    <model name='divider_bedroom_bathroom'>
+      <!-- x = -2.0, y +1.1 .. +5.0 -->
+      <static>true</static>
+      <pose>-2.0 3.05 1.1 0 0 0</pose>
+      <link name='link'>
+        <collision name='collision'>
+          <geometry><box><size>0.12 3.90 2.2</size></box></geometry>
+        </collision>
+        <visual name='visual'>
+          <geometry><box><size>0.12 3.90 2.2</size></box></geometry>
+          <material>
+            <ambient>0.26 0.25 0.22 1</ambient>
+            <diffuse>0.58 0.55 0.50 1</diffuse>
+            <specular>0.05 0.05 0.05 1</specular>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <model name='divider_bathroom_kitchen'>
+      <!-- x = +2.0, y +1.1 .. +5.0 -->
+      <static>true</static>
+      <pose>2.0 3.05 1.1 0 0 0</pose>
+      <link name='link'>
+        <collision name='collision'>
+          <geometry><box><size>0.12 3.90 2.2</size></box></geometry>
+        </collision>
+        <visual name='visual'>
+          <geometry><box><size>0.12 3.90 2.2</size></box></geometry>
+          <material>
+            <ambient>0.26 0.25 0.22 1</ambient>
+            <diffuse>0.58 0.55 0.50 1</diffuse>
+            <specular>0.05 0.05 0.05 1</specular>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <model name='divider_storage_living'>
+      <!-- x = -2.0, y -5.0 .. -1.1 -->
+      <static>true</static>
+      <pose>-2.0 -3.05 1.1 0 0 0</pose>
+      <link name='link'>
+        <collision name='collision'>
+          <geometry><box><size>0.12 3.90 2.2</size></box></geometry>
+        </collision>
+        <visual name='visual'>
+          <geometry><box><size>0.12 3.90 2.2</size></box></geometry>
+          <material>
+            <ambient>0.26 0.25 0.22 1</ambient>
+            <diffuse>0.58 0.55 0.50 1</diffuse>
+            <specular>0.05 0.05 0.05 1</specular>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- ==========================================================
+         KITCHEN  (x [+2.00, +7.40], y [+1.10, +4.90])
+         Warm wood tone for counter and table; stove dark grey, fridge light
+         grey as specified. All of it hugs the north/east walls so the strip in
+         front of the kitchen door (x 3.60..4.70) stays completely open.
+         ========================================================== -->
+    <model name='kitchen_counter'>
+      <static>true</static>
+      <pose>4.50 4.55 0.45 0 0 0</pose>
+      <link name='link'>
+        <collision name='collision'>
+          <geometry><box><size>3.00 0.60 0.90</size></box></geometry>
+        </collision>
+        <visual name='visual'>
+          <geometry><box><size>3.00 0.60 0.90</size></box></geometry>
+          <material>
+            <ambient>0.36 0.26 0.14 1</ambient>
+            <diffuse>0.72 0.53 0.30 1</diffuse>
+            <specular>0.08 0.08 0.08 1</specular>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <model name='kitchen_stove'>
+      <static>true</static>
+      <pose>2.60 4.55 0.45 0 0 0</pose>
+      <link name='link'>
+        <collision name='collision'>
+          <geometry><box><size>0.60 0.60 0.90</size></box></geometry>
+        </collision>
+        <visual name='visual'>
+          <geometry><box><size>0.60 0.60 0.90</size></box></geometry>
+          <material>
+            <ambient>0.10 0.10 0.11 1</ambient>
+            <diffuse>0.22 0.22 0.24 1</diffuse>
+            <specular>0.20 0.20 0.20 1</specular>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <model name='kitchen_fridge'>
+      <static>true</static>
+      <pose>6.95 2.20 0.90 0 0 0</pose>
+      <link name='link'>
+        <collision name='collision'>
+          <geometry><box><size>0.70 0.70 1.80</size></box></geometry>
+        </collision>
+        <visual name='visual'>
+          <geometry><box><size>0.70 0.70 1.80</size></box></geometry>
+          <material>
+            <ambient>0.55 0.55 0.57 1</ambient>
+            <diffuse>0.82 0.82 0.85 1</diffuse>
+            <specular>0.25 0.25 0.25 1</specular>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <model name='kitchen_table'>
+      <!-- Model origin on the floor at (3.60, 2.60); top slab + four legs are
+           offset inside the link. Top surface sits at z 0.75, i.e. well above
+           the 0.13 m camera - the robot sees the LEGS, which is exactly the
+           kind of thin obstacle the depth->scan conversion tends to miss. -->
+      <static>true</static>
+      <pose>3.60 2.60 0 0 0 0</pose>
+      <link name='link'>
+        <collision name='collision_top'>
+          <pose>0 0 0.72 0 0 0</pose>
+          <geometry><box><size>1.20 0.80 0.06</size></box></geometry>
+        </collision>
+        <visual name='visual_top'>
+          <pose>0 0 0.72 0 0 0</pose>
+          <geometry><box><size>1.20 0.80 0.06</size></box></geometry>
+          <material>
+            <ambient>0.36 0.26 0.14 1</ambient>
+            <diffuse>0.72 0.53 0.30 1</diffuse>
+            <specular>0.08 0.08 0.08 1</specular>
+          </material>
+        </visual>
+
+        <collision name='collision_leg_nw'>
+          <pose>-0.55 0.35 0.36 0 0 0</pose>
+          <geometry><box><size>0.06 0.06 0.72</size></box></geometry>
+        </collision>
+        <visual name='visual_leg_nw'>
+          <pose>-0.55 0.35 0.36 0 0 0</pose>
+          <geometry><box><size>0.06 0.06 0.72</size></box></geometry>
+          <material>
+            <ambient>0.30 0.21 0.11 1</ambient>
+            <diffuse>0.60 0.43 0.24 1</diffuse>
+          </material>
+        </visual>
+
+        <collision name='collision_leg_ne'>
+          <pose>0.55 0.35 0.36 0 0 0</pose>
+          <geometry><box><size>0.06 0.06 0.72</size></box></geometry>
+        </collision>
+        <visual name='visual_leg_ne'>
+          <pose>0.55 0.35 0.36 0 0 0</pose>
+          <geometry><box><size>0.06 0.06 0.72</size></box></geometry>
+          <material>
+            <ambient>0.30 0.21 0.11 1</ambient>
+            <diffuse>0.60 0.43 0.24 1</diffuse>
+          </material>
+        </visual>
+
+        <collision name='collision_leg_sw'>
+          <pose>-0.55 -0.35 0.36 0 0 0</pose>
+          <geometry><box><size>0.06 0.06 0.72</size></box></geometry>
+        </collision>
+        <visual name='visual_leg_sw'>
+          <pose>-0.55 -0.35 0.36 0 0 0</pose>
+          <geometry><box><size>0.06 0.06 0.72</size></box></geometry>
+          <material>
+            <ambient>0.30 0.21 0.11 1</ambient>
+            <diffuse>0.60 0.43 0.24 1</diffuse>
+          </material>
+        </visual>
+
+        <collision name='collision_leg_se'>
+          <pose>0.55 -0.35 0.36 0 0 0</pose>
+          <geometry><box><size>0.06 0.06 0.72</size></box></geometry>
+        </collision>
+        <visual name='visual_leg_se'>
+          <pose>0.55 -0.35 0.36 0 0 0</pose>
+          <geometry><box><size>0.06 0.06 0.72</size></box></geometry>
+          <material>
+            <ambient>0.30 0.21 0.11 1</ambient>
+            <diffuse>0.60 0.43 0.24 1</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- ==========================================================
+         BATHROOM  (x [-2.00, +2.00], y [+1.10, +4.90])
+         Everything WHITE. The toilet is the semantic cue for scenario s6, so it
+         is built from three distinct primitives (base + round bowl + tall tank)
+         instead of one box: at the 320x240 camera resolution a plain white box
+         is indistinguishable from a cabinet, but base-plus-bowl-plus-tank still
+         reads as a toilet. It sits at x=-1.30 while the doorway is at x=0, so
+         the line of sight from (0, 1.1) to the toilet crosses nothing.
+         ========================================================== -->
+    <model name='bath_toilet'>
+      <static>true</static>
+      <pose>-1.30 2.50 0 0 0 0</pose>
+      <link name='link'>
+        <collision name='collision_base'>
+          <pose>0 0 0.18 0 0 0</pose>
+          <geometry><box><size>0.36 0.50 0.36</size></box></geometry>
+        </collision>
+        <visual name='visual_base'>
+          <pose>0 0 0.18 0 0 0</pose>
+          <geometry><box><size>0.36 0.50 0.36</size></box></geometry>
+          <material>
+            <ambient>0.70 0.70 0.70 1</ambient>
+            <diffuse>0.96 0.96 0.96 1</diffuse>
+            <specular>0.30 0.30 0.30 1</specular>
+          </material>
+        </visual>
+
+        <collision name='collision_bowl'>
+          <pose>0 0 0.41 0 0 0</pose>
+          <geometry><cylinder><radius>0.19</radius><length>0.10</length></cylinder></geometry>
+        </collision>
+        <visual name='visual_bowl'>
+          <pose>0 0 0.41 0 0 0</pose>
+          <geometry><cylinder><radius>0.19</radius><length>0.10</length></cylinder></geometry>
+          <material>
+            <ambient>0.70 0.70 0.70 1</ambient>
+            <diffuse>0.96 0.96 0.96 1</diffuse>
+            <specular>0.30 0.30 0.30 1</specular>
+          </material>
+        </visual>
+
+        <!-- Tank offset -0.22 in y, i.e. on the hallway-wall side of the bowl. -->
+        <collision name='collision_tank'>
+          <pose>0 -0.22 0.60 0 0 0</pose>
+          <geometry><box><size>0.36 0.18 0.45</size></box></geometry>
+        </collision>
+        <visual name='visual_tank'>
+          <pose>0 -0.22 0.60 0 0 0</pose>
+          <geometry><box><size>0.36 0.18 0.45</size></box></geometry>
+          <material>
+            <ambient>0.70 0.70 0.70 1</ambient>
+            <diffuse>0.96 0.96 0.96 1</diffuse>
+            <specular>0.30 0.30 0.30 1</specular>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <model name='bath_tub'>
+      <!-- Open-topped box: one floor slab plus four 0.08-thick, 0.55-tall
+           walls. Left open so a target prop can be dropped inside it. -->
+      <static>true</static>
+      <pose>-1.00 4.40 0 0 0 0</pose>
+      <link name='link'>
+        <collision name='collision_floor'>
+          <pose>0 0 0.04 0 0 0</pose>
+          <geometry><box><size>1.60 0.75 0.08</size></box></geometry>
+        </collision>
+        <visual name='visual_floor'>
+          <pose>0 0 0.04 0 0 0</pose>
+          <geometry><box><size>1.60 0.75 0.08</size></box></geometry>
+          <material>
+            <ambient>0.70 0.70 0.70 1</ambient>
+            <diffuse>0.96 0.96 0.96 1</diffuse>
+            <specular>0.30 0.30 0.30 1</specular>
+          </material>
+        </visual>
+
+        <collision name='collision_wall_ypos'>
+          <pose>0 0.335 0.355 0 0 0</pose>
+          <geometry><box><size>1.60 0.08 0.55</size></box></geometry>
+        </collision>
+        <visual name='visual_wall_ypos'>
+          <pose>0 0.335 0.355 0 0 0</pose>
+          <geometry><box><size>1.60 0.08 0.55</size></box></geometry>
+          <material>
+            <ambient>0.70 0.70 0.70 1</ambient>
+            <diffuse>0.96 0.96 0.96 1</diffuse>
+            <specular>0.30 0.30 0.30 1</specular>
+          </material>
+        </visual>
+
+        <collision name='collision_wall_yneg'>
+          <pose>0 -0.335 0.355 0 0 0</pose>
+          <geometry><box><size>1.60 0.08 0.55</size></box></geometry>
+        </collision>
+        <visual name='visual_wall_yneg'>
+          <pose>0 -0.335 0.355 0 0 0</pose>
+          <geometry><box><size>1.60 0.08 0.55</size></box></geometry>
+          <material>
+            <ambient>0.70 0.70 0.70 1</ambient>
+            <diffuse>0.96 0.96 0.96 1</diffuse>
+            <specular>0.30 0.30 0.30 1</specular>
+          </material>
+        </visual>
+
+        <collision name='collision_wall_xneg'>
+          <pose>-0.76 0 0.355 0 0 0</pose>
+          <geometry><box><size>0.08 0.59 0.55</size></box></geometry>
+        </collision>
+        <visual name='visual_wall_xneg'>
+          <pose>-0.76 0 0.355 0 0 0</pose>
+          <geometry><box><size>0.08 0.59 0.55</size></box></geometry>
+          <material>
+            <ambient>0.70 0.70 0.70 1</ambient>
+            <diffuse>0.96 0.96 0.96 1</diffuse>
+            <specular>0.30 0.30 0.30 1</specular>
+          </material>
+        </visual>
+
+        <collision name='collision_wall_xpos'>
+          <pose>0.76 0 0.355 0 0 0</pose>
+          <geometry><box><size>0.08 0.59 0.55</size></box></geometry>
+        </collision>
+        <visual name='visual_wall_xpos'>
+          <pose>0.76 0 0.355 0 0 0</pose>
+          <geometry><box><size>0.08 0.59 0.55</size></box></geometry>
+          <material>
+            <ambient>0.70 0.70 0.70 1</ambient>
+            <diffuse>0.96 0.96 0.96 1</diffuse>
+            <specular>0.30 0.30 0.30 1</specular>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <model name='bath_sink'>
+      <static>true</static>
+      <pose>1.50 2.00 0 0 0 0</pose>
+      <link name='link'>
+        <collision name='collision_pedestal'>
+          <pose>0 0 0.35 0 0 0</pose>
+          <geometry><cylinder><radius>0.12</radius><length>0.70</length></cylinder></geometry>
+        </collision>
+        <visual name='visual_pedestal'>
+          <pose>0 0 0.35 0 0 0</pose>
+          <geometry><cylinder><radius>0.12</radius><length>0.70</length></cylinder></geometry>
+          <material>
+            <ambient>0.70 0.70 0.70 1</ambient>
+            <diffuse>0.96 0.96 0.96 1</diffuse>
+            <specular>0.30 0.30 0.30 1</specular>
+          </material>
+        </visual>
+
+        <collision name='collision_basin'>
+          <pose>0 0 0.79 0 0 0</pose>
+          <geometry><box><size>0.50 0.40 0.18</size></box></geometry>
+        </collision>
+        <visual name='visual_basin'>
+          <pose>0 0 0.79 0 0 0</pose>
+          <geometry><box><size>0.50 0.40 0.18</size></box></geometry>
+          <material>
+            <ambient>0.70 0.70 0.70 1</ambient>
+            <diffuse>0.96 0.96 0.96 1</diffuse>
+            <specular>0.30 0.30 0.30 1</specular>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- ==========================================================
+         BEDROOM  (x [-7.40, -2.00], y [+1.10, +4.90])
+         Beige bed, brown wardrobe.
+         NOTE ON THE WARDROBE: the layout contract gives it as "1.20 x 0.60"
+         centred at x=-7.00. Taken as (x-size, y-size) that would put its west
+         face at x=-7.60 - buried 0.175 m inside the exterior wall and outside
+         the bedroom AABB (x >= -7.40). It is authored here with the 1.20 m face
+         running along Y instead, which keeps the specified centre and the
+         specified 1.20 x 0.60 footprint while standing it flat against the west
+         wall where a wardrobe belongs. storage_rack below has the same fix.
+         ========================================================== -->
+    <model name='bedroom_bed'>
+      <static>true</static>
+      <pose>-5.00 3.50 0.225 0 0 0</pose>
+      <link name='link'>
+        <collision name='collision'>
+          <geometry><box><size>2.00 1.50 0.45</size></box></geometry>
+        </collision>
+        <visual name='visual'>
+          <geometry><box><size>2.00 1.50 0.45</size></box></geometry>
+          <material>
+            <ambient>0.48 0.43 0.33 1</ambient>
+            <diffuse>0.87 0.79 0.62 1</diffuse>
+            <specular>0.05 0.05 0.05 1</specular>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <model name='bedroom_wardrobe'>
+      <static>true</static>
+      <pose>-7.00 2.30 1.00 0 0 0</pose>
+      <link name='link'>
+        <collision name='collision'>
+          <geometry><box><size>0.60 1.20 2.00</size></box></geometry>
+        </collision>
+        <visual name='visual'>
+          <geometry><box><size>0.60 1.20 2.00</size></box></geometry>
+          <material>
+            <ambient>0.22 0.13 0.06 1</ambient>
+            <diffuse>0.45 0.27 0.13 1</diffuse>
+            <specular>0.05 0.05 0.05 1</specular>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- ==========================================================
+         STORAGE  (x [-7.40, -2.00], y [-4.90, -1.10])
+         A single grey shelving rack against the west wall. Same axis swap as
+         bedroom_wardrobe: as literally written (1.60 along x at x=-6.90) it
+         would reach x=-7.70, i.e. straight through the exterior wall.
+         ========================================================== -->
+    <model name='storage_rack'>
+      <static>true</static>
+      <pose>-6.90 -3.00 0.90 0 0 0</pose>
+      <link name='link'>
+        <collision name='collision'>
+          <geometry><box><size>0.45 1.60 1.80</size></box></geometry>
+        </collision>
+        <visual name='visual'>
+          <geometry><box><size>0.45 1.60 1.80</size></box></geometry>
+          <material>
+            <ambient>0.28 0.28 0.29 1</ambient>
+            <diffuse>0.52 0.52 0.55 1</diffuse>
+            <specular>0.10 0.10 0.10 1</specular>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- ==========================================================
+         LIVING ROOM  (x [-2.00, +7.40], y [-4.90, -1.10])
+         Dark green sofa, black TV stand, brown low table. The TV stand is only
+         0.50 m tall, so it stays inside the camera's visible band from ~1.5 m
+         out - deliberately, it is a landmark the VLM can name.
+         ========================================================== -->
+    <model name='living_sofa'>
+      <static>true</static>
+      <pose>2.50 -4.30 0 0 0 0</pose>
+      <link name='link'>
+        <collision name='collision_seat'>
+          <pose>0 0 0.21 0 0 0</pose>
+          <geometry><box><size>2.00 0.85 0.42</size></box></geometry>
+        </collision>
+        <visual name='visual_seat'>
+          <pose>0 0 0.21 0 0 0</pose>
+          <geometry><box><size>2.00 0.85 0.42</size></box></geometry>
+          <material>
+            <ambient>0.05 0.16 0.08 1</ambient>
+            <diffuse>0.11 0.34 0.17 1</diffuse>
+            <specular>0.05 0.05 0.05 1</specular>
+          </material>
+        </visual>
+
+        <!-- Backrest on the -y side, i.e. against the south exterior wall. -->
+        <collision name='collision_back'>
+          <pose>0 -0.33 0.60 0 0 0</pose>
+          <geometry><box><size>2.00 0.20 0.45</size></box></geometry>
+        </collision>
+        <visual name='visual_back'>
+          <pose>0 -0.33 0.60 0 0 0</pose>
+          <geometry><box><size>2.00 0.20 0.45</size></box></geometry>
+          <material>
+            <ambient>0.05 0.16 0.08 1</ambient>
+            <diffuse>0.11 0.34 0.17 1</diffuse>
+            <specular>0.05 0.05 0.05 1</specular>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <model name='living_tv_stand'>
+      <static>true</static>
+      <pose>5.50 -2.10 0.25 0 0 0</pose>
+      <link name='link'>
+        <collision name='collision'>
+          <geometry><box><size>1.40 0.40 0.50</size></box></geometry>
+        </collision>
+        <visual name='visual'>
+          <geometry><box><size>1.40 0.40 0.50</size></box></geometry>
+          <material>
+            <ambient>0.03 0.03 0.03 1</ambient>
+            <diffuse>0.09 0.09 0.10 1</diffuse>
+            <specular>0.15 0.15 0.15 1</specular>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <model name='living_table'>
+      <static>true</static>
+      <pose>2.50 -2.80 0.20 0 0 0</pose>
+      <link name='link'>
+        <collision name='collision'>
+          <geometry><box><size>1.00 0.60 0.40</size></box></geometry>
+        </collision>
+        <visual name='visual'>
+          <geometry><box><size>1.00 0.60 0.40</size></box></geometry>
+          <material>
+            <ambient>0.24 0.15 0.07 1</ambient>
+            <diffuse>0.50 0.31 0.15 1</diffuse>
+            <specular>0.05 0.05 0.05 1</specular>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- ==========================================================
+         LIGHTS - eight world-level point lights, one per room plus three
+         along the hallway.
+
+         WHY THERE IS NO SUN
+         A <light type="directional"> named "sun" would flood the whole
+         apartment from outside and, because it has no position, could not be
+         associated with any single room. Killing one room's point light while a
+         sun is present changes almost nothing on camera, so the "lights off"
+         perturbation would be untestable. With ambient at 0.30 and NO sun,
+         zeroing light_kitchen genuinely leaves the kitchen dim enough that the
+         detector starts failing - which is the whole point of the experiment.
+
+         WHY THEY ARE DIRECT CHILDREN OF <world>
+         gz's /world/house/light_config service can only reconfigure lights that
+         belong to the world itself. A light nested inside a <model> is
+         unreachable, so none of these may ever be moved into a model.
+
+         NAMES ARE AN API. The scenario YAML files reference these exact
+         strings in their lights_off lists - do not rename them.
+
+         light_config replaces the ENTIRE light message, so the runner has to
+         re-send range/attenuation/pose too; the values below are the ones it
+         echoes back when restoring a light.
+         ========================================================== -->
+    <light name='light_hallway_w' type='point'>
+      <cast_shadows>false</cast_shadows>
+      <pose>-4.50 0.00 2.0 0 0 0</pose>
+      <diffuse>0.62 0.60 0.56 1</diffuse>
+      <specular>0.10 0.10 0.10 1</specular>
+      <attenuation>
+        <range>12</range>
+        <constant>0.80</constant>
+        <linear>0.05</linear>
+        <quadratic>0.005</quadratic>
+      </attenuation>
+    </light>
+
+    <light name='light_hallway_c' type='point'>
+      <cast_shadows>false</cast_shadows>
+      <pose>0.00 0.00 2.0 0 0 0</pose>
+      <diffuse>0.62 0.60 0.56 1</diffuse>
+      <specular>0.10 0.10 0.10 1</specular>
+      <attenuation>
+        <range>12</range>
+        <constant>0.80</constant>
+        <linear>0.05</linear>
+        <quadratic>0.005</quadratic>
+      </attenuation>
+    </light>
+
+    <light name='light_hallway_e' type='point'>
+      <cast_shadows>false</cast_shadows>
+      <pose>4.00 0.00 2.0 0 0 0</pose>
+      <diffuse>0.62 0.60 0.56 1</diffuse>
+      <specular>0.10 0.10 0.10 1</specular>
+      <attenuation>
+        <range>12</range>
+        <constant>0.80</constant>
+        <linear>0.05</linear>
+        <quadratic>0.005</quadratic>
+      </attenuation>
+    </light>
+
+    <light name='light_bedroom' type='point'>
+      <cast_shadows>false</cast_shadows>
+      <pose>-4.70 3.00 2.0 0 0 0</pose>
+      <diffuse>0.62 0.60 0.56 1</diffuse>
+      <specular>0.10 0.10 0.10 1</specular>
+      <attenuation>
+        <range>12</range>
+        <constant>0.80</constant>
+        <linear>0.05</linear>
+        <quadratic>0.005</quadratic>
+      </attenuation>
+    </light>
+
+    <light name='light_bathroom' type='point'>
+      <cast_shadows>false</cast_shadows>
+      <pose>0.00 3.00 2.0 0 0 0</pose>
+      <diffuse>0.62 0.60 0.56 1</diffuse>
+      <specular>0.10 0.10 0.10 1</specular>
+      <attenuation>
+        <range>12</range>
+        <constant>0.80</constant>
+        <linear>0.05</linear>
+        <quadratic>0.005</quadratic>
+      </attenuation>
+    </light>
+
+    <light name='light_kitchen' type='point'>
+      <cast_shadows>false</cast_shadows>
+      <pose>4.70 3.00 2.0 0 0 0</pose>
+      <diffuse>0.62 0.60 0.56 1</diffuse>
+      <specular>0.10 0.10 0.10 1</specular>
+      <attenuation>
+        <range>12</range>
+        <constant>0.80</constant>
+        <linear>0.05</linear>
+        <quadratic>0.005</quadratic>
+      </attenuation>
+    </light>
+
+    <light name='light_storage' type='point'>
+      <cast_shadows>false</cast_shadows>
+      <pose>-4.70 -3.00 2.0 0 0 0</pose>
+      <diffuse>0.62 0.60 0.56 1</diffuse>
+      <specular>0.10 0.10 0.10 1</specular>
+      <attenuation>
+        <range>12</range>
+        <constant>0.80</constant>
+        <linear>0.05</linear>
+        <quadratic>0.005</quadratic>
+      </attenuation>
+    </light>
+
+    <light name='light_living' type='point'>
+      <cast_shadows>false</cast_shadows>
+      <pose>2.70 -3.00 2.0 0 0 0</pose>
+      <diffuse>0.62 0.60 0.56 1</diffuse>
+      <specular>0.10 0.10 0.10 1</specular>
+      <attenuation>
+        <range>12</range>
+        <constant>0.80</constant>
+        <linear>0.05</linear>
+        <quadratic>0.005</quadratic>
+      </attenuation>
+    </light>
+
+  </world>
+</sdf>

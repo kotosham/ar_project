@@ -1,0 +1,58 @@
+<?xml version="1.0"?>
+<!--
+  target_cup - the canonical "cup" search target for the detect/fetch scenarios
+  (s1 baseline search, s2 "cup is in the kitchen" sign-reading, and every
+  perturbation overlay that reuses a simple named object).
+
+  WHY IT LOOKS LIKE THIS:
+  * static=true - the robot must never nudge the target. If a wheel brushed it
+    the object would drift and two runs of the same scenario would no longer be
+    comparable; reproducible episodes are the whole point of the benchmark.
+  * The camera_link of my_bot sits at z = 0.13 m, so the useful vertical band is
+    tiny (at 2 m the camera sees 0.00 .. 1.03 m). The cup is deliberately a
+    floor-standing 11 cm object: its whole body lands near the centre of the
+    image instead of above the frame.
+  * Bright saturated RED with a high <ambient> term so it still reads as a cup
+    after the "lights off" perturbation dims the point lights to zero.
+  * A separate handle box is modelled because the open-vocab detector keys on
+    silhouette; a bare cylinder is regularly labelled "vase"/"can" instead of
+    the vocab word "cup".
+-->
+<sdf version="1.7">
+  <model name="target_cup">
+    <static>true</static>
+    <link name="link">
+
+      <!-- Cup body: r 0.045, h 0.11, centred at z 0.055 so it rests on the floor. -->
+      <visual name="body_visual">
+        <pose>0 0 0.055 0 0 0</pose>
+        <geometry><cylinder><radius>0.045</radius><length>0.11</length></cylinder></geometry>
+        <material>
+          <ambient>0.80 0.05 0.05 1</ambient>
+          <diffuse>0.95 0.06 0.06 1</diffuse>
+          <specular>0.20 0.20 0.20 1</specular>
+        </material>
+      </visual>
+      <collision name="body_collision">
+        <pose>0 0 0.055 0 0 0</pose>
+        <geometry><cylinder><radius>0.045</radius><length>0.11</length></cylinder></geometry>
+      </collision>
+
+      <!-- Handle: the silhouette cue that pushes the detector to "cup". -->
+      <visual name="handle_visual">
+        <pose>0.055 0 0.06 0 0 0</pose>
+        <geometry><box><size>0.02 0.05 0.06</size></box></geometry>
+        <material>
+          <ambient>0.80 0.05 0.05 1</ambient>
+          <diffuse>0.95 0.06 0.06 1</diffuse>
+          <specular>0.20 0.20 0.20 1</specular>
+        </material>
+      </visual>
+      <collision name="handle_collision">
+        <pose>0.055 0 0.06 0 0 0</pose>
+        <geometry><box><size>0.02 0.05 0.06</size></box></geometry>
+      </collision>
+
+    </link>
+  </model>
+</sdf>

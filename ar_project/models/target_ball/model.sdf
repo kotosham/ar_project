@@ -1,0 +1,40 @@
+<?xml version="1.0"?>
+<!--
+  target_ball - the "sports ball" target. This is the long-range / depth-gap
+  scenario prop: it is parked at the far end of the 14.8 m hallway, beyond the
+  8 m depth+/scan horizon, so the RGB camera (far clip raised to 30 m) sees it
+  while depth returns nothing. That mismatch is exactly what the depth_gap
+  diagnosis is meant to expose.
+
+  WHY IT LOOKS LIKE THIS:
+  * static=true - the oracle checks near_xy against a hard-coded pose, so the
+    ball must not roll. A dynamic sphere on a mu-100 ground plane would drift
+    from the tiniest contact and break run-to-run reproducibility.
+  * r = 0.11 m, centre z = 0.11 -> the ball touches the floor. With the camera
+    at z = 0.13 m this object is almost exactly at eye level, which is why it
+    survives being the only visible thing at 13 m in a 320x240 frame.
+  * Bright ORANGE with a strong ambient term so it stays visible when the
+    hallway lights are dimmed to zero.
+-->
+<sdf version="1.7">
+  <model name="target_ball">
+    <static>true</static>
+    <link name="link">
+
+      <visual name="visual">
+        <pose>0 0 0.11 0 0 0</pose>
+        <geometry><sphere><radius>0.11</radius></sphere></geometry>
+        <material>
+          <ambient>0.90 0.40 0.03 1</ambient>
+          <diffuse>1.00 0.45 0.04 1</diffuse>
+          <specular>0.20 0.20 0.20 1</specular>
+        </material>
+      </visual>
+      <collision name="collision">
+        <pose>0 0 0.11 0 0 0</pose>
+        <geometry><sphere><radius>0.11</radius></sphere></geometry>
+      </collision>
+
+    </link>
+  </model>
+</sdf>

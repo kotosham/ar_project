@@ -1,0 +1,74 @@
+<?xml version="1.0"?>
+<!--
+  occluder_screen - the free-standing partition used by the occlusion scenarios:
+  a target (usually target_towel or target_cup) is parked directly behind it, so
+  the object is NOT detectable from the doorway and the planner has to keep
+  exploring / change viewpoint instead of declaring failure on the first frame.
+
+  WHY IT LOOKS LIKE THIS:
+  * static=true - it must stay exactly where the scenario spawned it, otherwise
+    "occluded from pose A, visible from pose B" is no longer reproducible.
+  * Board 0.90 (x) x 0.06 (y) x 1.00 (z) with its centre at z = 0.50, i.e. it
+    spans the floor up to 1.00 m. my_bot's camera_link is at z = 0.13 m and the
+    vertical half-angle is 24.3 deg, so a 1 m tall screen blocks the whole frame
+    out to roughly 1.9 m and still blocks everything below 1.0 m further away.
+    Making it taller would be pointless - the camera never looks up there.
+  * Two feet 0.10 x 0.30 x 0.04 at x = +/-0.40 give the screen a visible
+    free-standing footprint and a collision base, so /scan sees a solid obstacle
+    rather than a floating wall with a suspicious gap underneath.
+  * DARK GREY so it does not read as any detector vocab word - it must be an
+    obstacle, never a candidate target.
+-->
+<sdf version="1.7">
+  <model name="occluder_screen">
+    <static>true</static>
+    <link name="link">
+
+      <!-- Screen board: floor .. 1.00 m, centre z 0.50. -->
+      <visual name="board_visual">
+        <pose>0 0 0.50 0 0 0</pose>
+        <geometry><box><size>0.90 0.06 1.00</size></box></geometry>
+        <material>
+          <ambient>0.18 0.18 0.20 1</ambient>
+          <diffuse>0.26 0.26 0.28 1</diffuse>
+          <specular>0.05 0.05 0.05 1</specular>
+        </material>
+      </visual>
+      <collision name="board_collision">
+        <pose>0 0 0.50 0 0 0</pose>
+        <geometry><box><size>0.90 0.06 1.00</size></box></geometry>
+      </collision>
+
+      <!-- Left foot. -->
+      <visual name="foot_left_visual">
+        <pose>-0.40 0 0.02 0 0 0</pose>
+        <geometry><box><size>0.10 0.30 0.04</size></box></geometry>
+        <material>
+          <ambient>0.14 0.14 0.16 1</ambient>
+          <diffuse>0.20 0.20 0.22 1</diffuse>
+          <specular>0.05 0.05 0.05 1</specular>
+        </material>
+      </visual>
+      <collision name="foot_left_collision">
+        <pose>-0.40 0 0.02 0 0 0</pose>
+        <geometry><box><size>0.10 0.30 0.04</size></box></geometry>
+      </collision>
+
+      <!-- Right foot. -->
+      <visual name="foot_right_visual">
+        <pose>0.40 0 0.02 0 0 0</pose>
+        <geometry><box><size>0.10 0.30 0.04</size></box></geometry>
+        <material>
+          <ambient>0.14 0.14 0.16 1</ambient>
+          <diffuse>0.20 0.20 0.22 1</diffuse>
+          <specular>0.05 0.05 0.05 1</specular>
+        </material>
+      </visual>
+      <collision name="foot_right_collision">
+        <pose>0.40 0 0.02 0 0 0</pose>
+        <geometry><box><size>0.10 0.30 0.04</size></box></geometry>
+      </collision>
+
+    </link>
+  </model>
+</sdf>

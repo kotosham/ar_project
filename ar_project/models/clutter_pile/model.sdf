@@ -1,0 +1,72 @@
+<?xml version="1.0"?>
+<!--
+  clutter_pile - the navigation-disturbance prop. Scenarios drop one or two of
+  these into a doorway or a hallway lane so the shortest path is blocked and the
+  planner must replan around it; the perturbation overlays reuse it as "the room
+  changed since the last run".
+
+  WHY IT LOOKS LIKE THIS:
+  * static=true - a movable pile would let the robot bulldoze through, which
+    turns a replanning test into a physics lottery and destroys reproducibility.
+  * Three adjacent/stacked boxes, tallest 0.45 m. my_bot's camera_link is at
+    z = 0.13 m, so a pile that tops out at 0.45 m already fills the frame from
+    close range; going higher would only push mass out of view. The staggered
+    footprint (roughly 0.95 x 0.55 m overall) is wider than the 0.40 x 0.35 m
+    robot, so squeezing past is genuinely impossible - the planner has to route
+    around it rather than nudge through.
+  * Uniform BROWN cardboard-ish colour: it must not look like any detector
+    vocab target, only like an obstacle.
+-->
+<sdf version="1.7">
+  <model name="clutter_pile">
+    <static>true</static>
+    <link name="link">
+
+      <!-- Main box. -->
+      <visual name="box_a_visual">
+        <pose>0 0 0.15 0 0 0</pose>
+        <geometry><box><size>0.40 0.30 0.30</size></box></geometry>
+        <material>
+          <ambient>0.34 0.21 0.10 1</ambient>
+          <diffuse>0.46 0.29 0.14 1</diffuse>
+          <specular>0.05 0.05 0.05 1</specular>
+        </material>
+      </visual>
+      <collision name="box_a_collision">
+        <pose>0 0 0.15 0 0 0</pose>
+        <geometry><box><size>0.40 0.30 0.30</size></box></geometry>
+      </collision>
+
+      <!-- Small box leaning on the +x side. -->
+      <visual name="box_b_visual">
+        <pose>0.35 0.10 0.125 0 0 0</pose>
+        <geometry><box><size>0.30 0.25 0.25</size></box></geometry>
+        <material>
+          <ambient>0.34 0.21 0.10 1</ambient>
+          <diffuse>0.46 0.29 0.14 1</diffuse>
+          <specular>0.05 0.05 0.05 1</specular>
+        </material>
+      </visual>
+      <collision name="box_b_collision">
+        <pose>0.35 0.10 0.125 0 0 0</pose>
+        <geometry><box><size>0.30 0.25 0.25</size></box></geometry>
+      </collision>
+
+      <!-- Tall box on the -x side: the part that actually fills the camera frame. -->
+      <visual name="box_c_visual">
+        <pose>-0.30 -0.15 0.225 0 0 0</pose>
+        <geometry><box><size>0.25 0.25 0.45</size></box></geometry>
+        <material>
+          <ambient>0.34 0.21 0.10 1</ambient>
+          <diffuse>0.46 0.29 0.14 1</diffuse>
+          <specular>0.05 0.05 0.05 1</specular>
+        </material>
+      </visual>
+      <collision name="box_c_collision">
+        <pose>-0.30 -0.15 0.225 0 0 0</pose>
+        <geometry><box><size>0.25 0.25 0.45</size></box></geometry>
+      </collision>
+
+    </link>
+  </model>
+</sdf>

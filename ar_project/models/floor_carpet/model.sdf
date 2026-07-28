@@ -1,0 +1,58 @@
+<?xml version="1.0"?>
+<!--
+  floor_carpet - the "hard floor transition" disturbance. Scenarios lay it across
+  a hallway lane or a doorway that the robot has to traverse, then measure how
+  odometry and the controller cope with driving onto it.
+
+  WHY IT LOOKS LIKE THIS:
+  * static=true - the mat must not slide out from under the wheels; the episode
+    has to be reproducible run after run.
+  * IMPORTANT - the actual disturbance is the GEOMETRY, not the friction. The
+    slab is 0.020 m thick with its centre at z = 0.010, so its top face is a
+    2 cm LIP that the 0.038 m radius wheels must physically climb. That step is
+    what jolts the chassis, makes the wheels slip momentarily and injects the
+    odometry error the scenario is diagnosing. The high friction below
+    (mu = mu2 = 1.6, carpet-like) is only there so that, once the robot is ON
+    the mat, it grips - it is the counterpart to floor_puddle, where the low mu
+    IS the disturbance.
+  * BROWN-RED so the carpet is obviously a different surface in the 320x240
+    frame; with the camera at only z = 0.13 m the floor occupies most of the
+    lower image, which is exactly where the mat shows up.
+-->
+<sdf version="1.7">
+  <model name="floor_carpet">
+    <static>true</static>
+    <link name="link">
+
+      <visual name="visual">
+        <pose>0 0 0.010 0 0 0</pose>
+        <geometry><box><size>2.00 1.60 0.020</size></box></geometry>
+        <material>
+          <ambient>0.38 0.14 0.10 1</ambient>
+          <diffuse>0.52 0.19 0.13 1</diffuse>
+          <specular>0.02 0.02 0.02 1</specular>
+        </material>
+      </visual>
+
+      <collision name="collision">
+        <pose>0 0 0.010 0 0 0</pose>
+        <geometry><box><size>2.00 1.60 0.020</size></box></geometry>
+        <!--
+          Friction lives here, inside the collision, so ODE actually applies it.
+          mu 1.6 = carpet grip. NOTE: the grip is NOT the disturbance in this
+          model - the 2 cm lip formed by the top face is. Compare floor_puddle,
+          whose mu 0.02 is the disturbance.
+        -->
+        <surface>
+          <friction>
+            <ode>
+              <mu>1.6</mu>
+              <mu2>1.6</mu2>
+            </ode>
+          </friction>
+        </surface>
+      </collision>
+
+    </link>
+  </model>
+</sdf>

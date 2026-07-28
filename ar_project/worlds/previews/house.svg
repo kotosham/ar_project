@@ -1,0 +1,82 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" role="img" viewBox="0 0 646.0 510.0" width="646" height="510" font-family="DejaVu Sans, Segoe UI, sans-serif">
+<title>Квартира из шести комнат</title>
+<rect x="0" y="0" width="646.0" height="510.0" fill="#101418"/>
+<g><line x1="-37.0" y1="34.0" x2="-37.0" y2="480.0" stroke="#1e262e" stroke-width="1"/><line x1="3.0" y1="34.0" x2="3.0" y2="480.0" stroke="#1e262e" stroke-width="1"/><line x1="43.0" y1="34.0" x2="43.0" y2="480.0" stroke="#1e262e" stroke-width="1"/><line x1="83.0" y1="34.0" x2="83.0" y2="480.0" stroke="#1e262e" stroke-width="1"/><line x1="123.0" y1="34.0" x2="123.0" y2="480.0" stroke="#2a333c" stroke-width="1"/><line x1="163.0" y1="34.0" x2="163.0" y2="480.0" stroke="#1e262e" stroke-width="1"/><line x1="203.0" y1="34.0" x2="203.0" y2="480.0" stroke="#1e262e" stroke-width="1"/><line x1="243.0" y1="34.0" x2="243.0" y2="480.0" stroke="#1e262e" stroke-width="1"/><line x1="283.0" y1="34.0" x2="283.0" y2="480.0" stroke="#1e262e" stroke-width="1"/><line x1="323.0" y1="34.0" x2="323.0" y2="480.0" stroke="#2a333c" stroke-width="1"/><line x1="363.0" y1="34.0" x2="363.0" y2="480.0" stroke="#1e262e" stroke-width="1"/><line x1="403.0" y1="34.0" x2="403.0" y2="480.0" stroke="#1e262e" stroke-width="1"/><line x1="443.0" y1="34.0" x2="443.0" y2="480.0" stroke="#1e262e" stroke-width="1"/><line x1="483.0" y1="34.0" x2="483.0" y2="480.0" stroke="#1e262e" stroke-width="1"/><line x1="523.0" y1="34.0" x2="523.0" y2="480.0" stroke="#2a333c" stroke-width="1"/><line x1="563.0" y1="34.0" x2="563.0" y2="480.0" stroke="#1e262e" stroke-width="1"/><line x1="603.0" y1="34.0" x2="603.0" y2="480.0" stroke="#1e262e" stroke-width="1"/><line x1="643.0" y1="34.0" x2="643.0" y2="480.0" stroke="#1e262e" stroke-width="1"/><line x1="0.0" y1="497.0" x2="646.0" y2="497.0" stroke="#1e262e" stroke-width="1"/><line x1="0.0" y1="457.0" x2="646.0" y2="457.0" stroke="#2a333c" stroke-width="1"/><line x1="0.0" y1="417.0" x2="646.0" y2="417.0" stroke="#1e262e" stroke-width="1"/><line x1="0.0" y1="377.0" x2="646.0" y2="377.0" stroke="#1e262e" stroke-width="1"/><line x1="0.0" y1="337.0" x2="646.0" y2="337.0" stroke="#1e262e" stroke-width="1"/><line x1="0.0" y1="297.0" x2="646.0" y2="297.0" stroke="#1e262e" stroke-width="1"/><line x1="0.0" y1="257.0" x2="646.0" y2="257.0" stroke="#2a333c" stroke-width="1"/><line x1="0.0" y1="217.0" x2="646.0" y2="217.0" stroke="#1e262e" stroke-width="1"/><line x1="0.0" y1="177.0" x2="646.0" y2="177.0" stroke="#1e262e" stroke-width="1"/><line x1="0.0" y1="137.0" x2="646.0" y2="137.0" stroke="#1e262e" stroke-width="1"/><line x1="0.0" y1="97.0" x2="646.0" y2="97.0" stroke="#1e262e" stroke-width="1"/><line x1="0.0" y1="57.0" x2="646.0" y2="57.0" stroke="#2a333c" stroke-width="1"/></g>
+<rect x="243.0" y="61.0" width="160.0" height="152.0" fill="#4a90d9" fill-opacity="0.06" stroke="#4a90d9" stroke-opacity="0.35" stroke-dasharray="4 4"/>
+<text x="323.0" y="137.0" fill="#4a90d9" font-size="12" text-anchor="middle" opacity="0.85">Ванная</text>
+<rect x="27.0" y="61.0" width="216.0" height="152.0" fill="#4a90d9" fill-opacity="0.06" stroke="#4a90d9" stroke-opacity="0.35" stroke-dasharray="4 4"/>
+<text x="135.0" y="137.0" fill="#4a90d9" font-size="12" text-anchor="middle" opacity="0.85">Спальня</text>
+<rect x="27.0" y="213.0" width="592.0" height="88.0" fill="#4a90d9" fill-opacity="0.06" stroke="#4a90d9" stroke-opacity="0.35" stroke-dasharray="4 4"/>
+<text x="323.0" y="257.0" fill="#4a90d9" font-size="12" text-anchor="middle" opacity="0.85">Коридор</text>
+<rect x="403.0" y="61.0" width="216.0" height="152.0" fill="#4a90d9" fill-opacity="0.06" stroke="#4a90d9" stroke-opacity="0.35" stroke-dasharray="4 4"/>
+<text x="511.0" y="137.0" fill="#4a90d9" font-size="12" text-anchor="middle" opacity="0.85">Кухня</text>
+<rect x="243.0" y="301.0" width="376.0" height="152.0" fill="#4a90d9" fill-opacity="0.06" stroke="#4a90d9" stroke-opacity="0.35" stroke-dasharray="4 4"/>
+<text x="431.0" y="377.0" fill="#4a90d9" font-size="12" text-anchor="middle" opacity="0.85">Гостиная</text>
+<rect x="27.0" y="301.0" width="216.0" height="152.0" fill="#4a90d9" fill-opacity="0.06" stroke="#4a90d9" stroke-opacity="0.35" stroke-dasharray="4 4"/>
+<text x="135.0" y="377.0" fill="#4a90d9" font-size="12" text-anchor="middle" opacity="0.85">Кладовая</text>
+<rect x="20.00" y="54.00" width="6.00" height="406.00" fill="#948c80" stroke="#0c0f12" stroke-width="1" transform="rotate(-0.000 23.00 257.00)"/>
+<rect x="620.00" y="54.00" width="6.00" height="406.00" fill="#948c80" stroke="#0c0f12" stroke-width="1" transform="rotate(-0.000 623.00 257.00)"/>
+<rect x="20.00" y="54.00" width="606.00" height="6.00" fill="#948c80" stroke="#0c0f12" stroke-width="1" transform="rotate(-0.000 323.00 57.00)"/>
+<rect x="20.00" y="454.00" width="606.00" height="6.00" fill="#948c80" stroke="#0c0f12" stroke-width="1" transform="rotate(-0.000 323.00 457.00)"/>
+<rect x="23.00" y="210.60" width="116.00" height="4.80" fill="#948c80" stroke="#0c0f12" stroke-width="1" transform="rotate(-0.000 81.00 213.00)"/>
+<rect x="183.00" y="210.60" width="118.00" height="4.80" fill="#948c80" stroke="#0c0f12" stroke-width="1" transform="rotate(-0.000 242.00 213.00)"/>
+<rect x="345.00" y="210.60" width="122.00" height="4.80" fill="#948c80" stroke="#0c0f12" stroke-width="1" transform="rotate(-0.000 406.00 213.00)"/>
+<rect x="511.00" y="210.60" width="112.00" height="4.80" fill="#948c80" stroke="#0c0f12" stroke-width="1" transform="rotate(-0.000 567.00 213.00)"/>
+<rect x="23.00" y="298.60" width="116.00" height="4.80" fill="#948c80" stroke="#0c0f12" stroke-width="1" transform="rotate(-0.000 81.00 301.00)"/>
+<rect x="183.00" y="298.60" width="236.00" height="4.80" fill="#948c80" stroke="#0c0f12" stroke-width="1" transform="rotate(-0.000 301.00 301.00)"/>
+<rect x="463.00" y="298.60" width="160.00" height="4.80" fill="#948c80" stroke="#0c0f12" stroke-width="1" transform="rotate(-0.000 543.00 301.00)"/>
+<rect x="240.60" y="57.00" width="4.80" height="156.00" fill="#948c80" stroke="#0c0f12" stroke-width="1" transform="rotate(-0.000 243.00 135.00)"/>
+<rect x="400.60" y="57.00" width="4.80" height="156.00" fill="#948c80" stroke="#0c0f12" stroke-width="1" transform="rotate(-0.000 403.00 135.00)"/>
+<rect x="240.60" y="301.00" width="4.80" height="156.00" fill="#948c80" stroke="#0c0f12" stroke-width="1" transform="rotate(-0.000 243.00 379.00)"/>
+<rect x="443.00" y="63.00" width="120.00" height="24.00" fill="#b8874c" stroke="#0c0f12" stroke-width="1" transform="rotate(-0.000 503.00 75.00)"/>
+<rect x="415.00" y="63.00" width="24.00" height="24.00" fill="#38383d" stroke="#0c0f12" stroke-width="1" transform="rotate(-0.000 427.00 75.00)"/>
+<rect x="587.00" y="155.00" width="28.00" height="28.00" fill="#d1d1d9" stroke="#0c0f12" stroke-width="1" transform="rotate(-0.000 601.00 169.00)"/>
+<rect x="443.00" y="137.00" width="48.00" height="32.00" fill="#b8874c" stroke="#0c0f12" stroke-width="1" transform="rotate(-0.000 467.00 153.00)"/>
+<rect x="443.80" y="137.80" width="2.40" height="2.40" fill="#996e3d" stroke="#0c0f12" stroke-width="1" transform="rotate(-0.000 445.00 139.00)"/>
+<rect x="487.80" y="137.80" width="2.40" height="2.40" fill="#996e3d" stroke="#0c0f12" stroke-width="1" transform="rotate(-0.000 489.00 139.00)"/>
+<rect x="443.80" y="165.80" width="2.40" height="2.40" fill="#996e3d" stroke="#0c0f12" stroke-width="1" transform="rotate(-0.000 445.00 167.00)"/>
+<rect x="487.80" y="165.80" width="2.40" height="2.40" fill="#996e3d" stroke="#0c0f12" stroke-width="1" transform="rotate(-0.000 489.00 167.00)"/>
+<rect x="263.80" y="147.00" width="14.40" height="20.00" fill="#f5f5f5" stroke="#0c0f12" stroke-width="1" transform="rotate(-0.000 271.00 157.00)"/>
+<circle cx="271.00" cy="157.00" r="7.60" fill="#f5f5f5" stroke="#0c0f12" stroke-width="1"/>
+<rect x="263.80" y="162.20" width="14.40" height="7.20" fill="#f5f5f5" stroke="#0c0f12" stroke-width="1" transform="rotate(-0.000 271.00 165.80)"/>
+<rect x="251.00" y="66.00" width="64.00" height="30.00" fill="#f5f5f5" stroke="#0c0f12" stroke-width="1" transform="rotate(-0.000 283.00 81.00)"/>
+<rect x="251.00" y="66.00" width="64.00" height="3.20" fill="#f5f5f5" stroke="#0c0f12" stroke-width="1" transform="rotate(-0.000 283.00 67.60)"/>
+<rect x="251.00" y="92.80" width="64.00" height="3.20" fill="#f5f5f5" stroke="#0c0f12" stroke-width="1" transform="rotate(-0.000 283.00 94.40)"/>
+<rect x="251.00" y="69.20" width="3.20" height="23.60" fill="#f5f5f5" stroke="#0c0f12" stroke-width="1" transform="rotate(-0.000 252.60 81.00)"/>
+<rect x="311.80" y="69.20" width="3.20" height="23.60" fill="#f5f5f5" stroke="#0c0f12" stroke-width="1" transform="rotate(-0.000 313.40 81.00)"/>
+<circle cx="383.00" cy="177.00" r="4.80" fill="#f5f5f5" stroke="#0c0f12" stroke-width="1"/>
+<rect x="373.00" y="169.00" width="20.00" height="16.00" fill="#f5f5f5" stroke="#0c0f12" stroke-width="1" transform="rotate(-0.000 383.00 177.00)"/>
+<rect x="83.00" y="87.00" width="80.00" height="60.00" fill="#dec99e" stroke="#0c0f12" stroke-width="1" transform="rotate(-0.000 123.00 117.00)"/>
+<rect x="31.00" y="141.00" width="24.00" height="48.00" fill="#734521" stroke="#0c0f12" stroke-width="1" transform="rotate(-0.000 43.00 165.00)"/>
+<rect x="38.00" y="345.00" width="18.00" height="64.00" fill="#85858c" stroke="#0c0f12" stroke-width="1" transform="rotate(-0.000 47.00 377.00)"/>
+<rect x="383.00" y="412.00" width="80.00" height="34.00" fill="#1c572b" stroke="#0c0f12" stroke-width="1" transform="rotate(-0.000 423.00 429.00)"/>
+<rect x="383.00" y="438.20" width="80.00" height="8.00" fill="#1c572b" stroke="#0c0f12" stroke-width="1" transform="rotate(-0.000 423.00 442.20)"/>
+<rect x="515.00" y="333.00" width="56.00" height="16.00" fill="#17171a" stroke="#0c0f12" stroke-width="1" transform="rotate(-0.000 543.00 341.00)"/>
+<rect x="403.00" y="357.00" width="40.00" height="24.00" fill="#804f26" stroke="#0c0f12" stroke-width="1" transform="rotate(-0.000 423.00 369.00)"/>
+<text x="503.0" y="69.0" fill="#8a949e" font-size="9" text-anchor="middle">kitchen_counter</text>
+<text x="427.0" y="69.0" fill="#8a949e" font-size="9" text-anchor="middle">kitchen_stove</text>
+<text x="601.0" y="163.0" fill="#8a949e" font-size="9" text-anchor="middle">kitchen_fridge</text>
+<text x="467.0" y="147.0" fill="#8a949e" font-size="9" text-anchor="middle">kitchen_table</text>
+<text x="271.0" y="151.0" fill="#8a949e" font-size="9" text-anchor="middle">bath_toilet</text>
+<text x="283.0" y="75.0" fill="#8a949e" font-size="9" text-anchor="middle">bath_tub</text>
+<text x="383.0" y="171.0" fill="#8a949e" font-size="9" text-anchor="middle">bath_sink</text>
+<text x="123.0" y="111.0" fill="#8a949e" font-size="9" text-anchor="middle">bedroom_bed</text>
+<text x="43.0" y="159.0" fill="#8a949e" font-size="9" text-anchor="middle">bedroom_wardrobe</text>
+<text x="47.0" y="371.0" fill="#8a949e" font-size="9" text-anchor="middle">storage_rack</text>
+<text x="423.0" y="423.0" fill="#8a949e" font-size="9" text-anchor="middle">living_sofa</text>
+<text x="543.0" y="335.0" fill="#8a949e" font-size="9" text-anchor="middle">living_tv_stand</text>
+<text x="423.0" y="363.0" fill="#8a949e" font-size="9" text-anchor="middle">living_table</text>
+<polygon points="54.0,257.0 37.4,252.8 37.4,261.2" fill="#33c06e" stroke="#0c0f12" stroke-width="1"/>
+<text x="43.0" y="277.0" fill="#33c06e" font-size="10" text-anchor="middle">старт</text>
+<text x="10" y="20" fill="#dbe4ec" font-size="13">Квартира из шести комнат</text>
+<text x="636.0" y="20" fill="#8a949e" font-size="10" text-anchor="end">world name: house</text>
+<g stroke="#8a949e" stroke-width="1.5" fill="none"><line x1="600.0" y1="68.0" x2="600.0" y2="44.0"/><line x1="600.0" y1="68.0" x2="624.0" y2="68.0"/></g>
+<text x="600.0" y="40.0" fill="#8a949e" font-size="9" text-anchor="middle">+Y</text>
+<text x="627.0" y="71.0" fill="#8a949e" font-size="9">+X</text>
+<line x1="10" y1="496.0" x2="50.0" y2="496.0" stroke="#dbe4ec" stroke-width="2"/>
+<line x1="10" y1="492.0" x2="10" y2="500.0" stroke="#dbe4ec" stroke-width="2"/>
+<line x1="50.0" y1="492.0" x2="50.0" y2="500.0" stroke="#dbe4ec" stroke-width="2"/>
+<text x="54.0" y="500.0" fill="#dbe4ec" font-size="10">1 м</text>
+<text x="636.0" y="500.0" fill="#8a949e" font-size="10" text-anchor="end">16.15 x 11.15 м, вид сверху</text>
+</svg>
