@@ -8,7 +8,7 @@
 - **Pi (робот):** executive (исполнительный слой) `search_coordinator` (SeekObject FSM + 5 skill-серверов +
   `frontier_extractor`) · аппаратный интерфейс ros2_control (`embodied_robot_system`, CAN/EPOS4) ·
   RealSense · локальный `/scan` (depthimage_to_laserscan) · облегчённый Nav2 · `map_odom_relay`.
-- **Edge (GPU-машина):** RTAB-Map RGB-D SLAM · `detect_target_server` (YOLOE, в venv) ·
+- **Edge (GPU-машина):** RTAB-Map RGB-D SLAM · `detect_target_server` (DINO+MobileSAM + YOLOE, в venv) ·
   `planner_orchestrator` (VLM). Сама VLM-модель — это внешний OpenAI-совместимый API.
 - **Два режима:** FLAT (без VLM, executive автономен) и VLM (orchestrator управляет
   skill-ами executive, при потере связи деградирует обратно к FLAT).
@@ -56,11 +56,12 @@ set -a; source ~/ros2_ws/src/object_tracking/planner_orchestrator/vlm.env; set +
 
 ros2 launch ar_project vlm_sim_bringup.launch.py \
   start_edge:=true \
-  venv_python:=/home/user/.venvs/ros-jazzy-ml/bin/python
+  venv_python:=/home/user/.venvs/ros-jazzy-ml/bin/python \
+  vlm_log_run_id:=sim_bus_001
 ```
 
 Что поднимается: Gazebo, RViz, SLAM, Nav2, `search_coordinator`, dashboard,
-`detect_target_server` и `planner_orchestrator`.
+VLM mission logger, `detect_target_server` и `planner_orchestrator`.
 
 **T2 — отправка VLM-миссии**
 
@@ -160,7 +161,10 @@ export ROS_DISABLE_ROS2CLI_DAEMON=1
 source ~/ros2_ws/src/ar_project/deploy/transport/transport_env.sh
 
 ros2 run search_coordinator coordinator_node --ros-args \
-  -p use_sim_time:=false
+  -p use_sim_time:=false \
+  -p approach_max_goal_step_m:=1.2 \
+  -p approach_direct_clearance_m:=0.55 \
+  -p approach_direct_if_goal_in_known_free_map:=true
 ```
 
 #### Edge-ноутбук
@@ -175,11 +179,12 @@ unset ROS_LOCALHOST_ONLY ROS_STATIC_PEERS ROS_AUTOMATIC_DISCOVERY_RANGE ROS_DISC
 export ROS_DISABLE_ROS2CLI_DAEMON=1
 source ~/ros2_ws/src/ar_project/deploy/transport/transport_env.sh
 
-ros2 launch ar_project edge_bringup.launch.py
+ros2 launch ar_project edge_bringup.launch.py \
+  vlm_log_run_id:=office_chair_001
 ```
 
 Что поднимается: единственный Wi-Fi consumer камеры, локальные `/camera_edge/*`, RTAB-Map и
-dashboard. Этот терминал **не** запускает detector и VLM-orchestrator.
+dashboard, а также VLM mission logger. Этот терминал **не** запускает detector и VLM-orchestrator.
 Для RealSense 6 FPS внутри `edge_bringup` RTAB-Map запускается с расширенным
 RGB-D sync-окном: `approx_sync_max_interval:=0.5`, `topic_queue_size:=120`,
 `sync_queue_size:=120`, `detection_rate:=1`.
@@ -203,7 +208,7 @@ source ~/ros2_ws/src/ar_project/deploy/transport/transport_env.sh
   -p use_compressed_input:=false \
   -p depth_point_strategy:=nearest_mask \
   -p target_conf_default:=0.50 \
-  -p vocab_conf_default:=0.12
+  -p vocab_conf_default:=0.08
 ```
 
 В `hybrid_dino_yoloe` конкретная цель (`chair`, `office chair`, `bus`) детектируется через
@@ -211,6 +216,13 @@ GroundingDINO+MobileSAM, а `DETECT_ALL` остается на YOLOE broad-vocab
 становился слишком тяжелым.
 `depth_point_strategy:=nearest_mask` означает, что пиксель для `DRIVE_TO_VISIBLE` выбирается
 по ближайшей валидной глубине внутри маски объекта, а не по геометрическому центру маски.
+Когда конкретная цель не найдена, orchestrator автоматически делает context-обзор сцены и
+передает VLM `context_marks`: нецелевые объекты с `side=left/center/right`, расстоянием и
+семантической релевантностью. Для офисных целей (`office chair`, `desk`, `cabinet`) context
+идет через GroundingDINO по офисному словарю (`desk`, `table`, `drawer cabinet`, `cabinet`,
+`shelf`, ...), потому что YOLOE в низком ракурсе часто путает офисную мебель с мусорными
+классами. Эти объекты не являются финальной целью для `DRIVE_TO_VISIBLE`, но помогают выбрать
+осмысленное направление исследования.
 
 **Edge T3 — VLM-orchestrator**
 
@@ -234,10 +246,13 @@ set +a
   -p max_steps:=40 \
   -p detect_conf:=0.0 \
   -p target_detect_conf:=0.50 \
-  -p detect_all_conf:=0.12 \
+  -p detect_all_conf:=0.08 \
+  -p context_detect_conf:=0.25 \
   -p vlm_timeout_s:=30.0 \
   -p send_map:=true \
   -p motion_fallback_frame:=odom \
+  -p approach_max_goal_step_m:=1.2 \
+  -p context_target_promote_conf:=0.30 \
   -p camera_image_topic:=/camera_edge/color/image_raw
 ```
 
@@ -355,7 +370,8 @@ set -a; source object_tracking/planner_orchestrator/vlm.env; set +a   # loads VL
 /home/user/.venvs/ros-jazzy-ml/bin/python -m planner_orchestrator.orchestrator_node \
   --ros-args -p use_sim_time:=true -p use_mock:=false -p replan_every_n:=3 -p max_steps:=40 \
   -p async_replan:=false -p detect_conf:=0.0 \
-  -p target_detect_conf:=0.50 -p detect_all_conf:=0.12
+  -p target_detect_conf:=0.50 -p detect_all_conf:=0.08 -p context_detect_conf:=0.25 \
+  -p approach_max_goal_step_m:=1.6
 # expect: "planner_orchestrator up ... client=OpenAICompatibleClient creds=env"
 ros2 topic pub --once /vlm_mission std_msgs/msg/String "{data: bus}"   # ЧИСТЫЙ лейбл (см. ниже)
 ```
@@ -375,9 +391,31 @@ Nav) · `DETECT_ALL`(детект всех объектов + классы, в n
 исполнителя, не действие VLM.
 
 #### Что уходит в VLM каждый ход
-Текст (`target`, `visible_marks`=[mark_id, label, score, **distance_m** с RealSense], notes) + **1-е
+Текст (`target`, `visible_marks`=[mark_id, label, score, **distance_m** с RealSense],
+`context_marks`=[mark_id, label, score, **distance_m**, side, relevance], notes) + **1-е
 изображение** (камера с номерами марок) + **2-е изображение** (top-down SLAM-карта `/map` с позой
 робота) + описание карты. Карта рендерится из `/map` (RTAB-Map), edge-локально.
+
+`visible_marks` — это кандидаты финальной цели, к ним можно применять `DRIVE_TO_VISIBLE`.
+`context_marks` — это объекты-подсказки для поиска: например `desk(left, office_context)`,
+когда ищем `office chair`. К ним нельзя напрямую вызвать `DRIVE_TO_VISIBLE`; VLM должна выбрать
+`TURN` или `DRIVE_FORWARD` в сторону полезного контекста. Если VLM все же ошибочно выберет
+`DRIVE_TO_VISIBLE mark_id` из `context_marks`, orchestrator не валит план в fallback, а
+автоматически превращает это в `semantic_explore`-маневр к этой области.
+
+Если финальная цель видна, но `distance_m=null` / глубина неизвестна (например объект дальше
+надежной зоны RealSense), VLM не должна завершать миссию и не должна вызывать
+`DRIVE_TO_VISIBLE`: нужно выполнить `target_probe` — повернуться к стороне цели или коротко
+проехать вперед, если цель по центру. Если VLM ошибочно выберет `DRIVE_TO_VISIBLE` для такой
+цели, orchestrator автоматически превратит это в безопасный `target_probe`.
+
+Даже когда глубина известна, `ApproachDetection` сначала проверяет финальную standoff-точку
+по `/map`: если она уже лежит в известной свободной клетке SLAM-карты, Nav2 получает прямой
+маршрут к цели. Если карты еще нет, точка вне карты, unknown/occupied или вокруг
+standoff-точки нет свободного радиуса `approach_direct_clearance_m`, подход режется на
+короткий шаг `approach_max_goal_step_m`, после которого VLM снова получает свежий кадр
+и карту. Это защищает онлайн-SLAM от целей за пределами текущей известной области карты
+и от прямой парковки слишком близко к препятствию.
 
 #### Ключевые параметры orchestrator
 | Параметр | Деф. | Зачем |
@@ -385,7 +423,14 @@ Nav) · `DETECT_ALL`(детект всех объектов + классы, в n
 | `async_replan` | `true` | `false` = дискретные шаги (едь→стоп→свежее наблюдение→думай). Для наблюдения/сравнения ставь `false` |
 | `detect_conf` | `0.0` | Legacy override: если >0, одним числом переопределяет оба порога ниже |
 | `target_detect_conf` | `0.50` | Порог конкретной цели для DINO+MobileSAM (`chair`, `drawer cabinet`) — как в базовой дипломной реализации |
-| `detect_all_conf` | `0.12` | Порог `DETECT_ALL` для YOLOE broad-vocab — как в базовой дипломной реализации |
+| `detect_all_conf` | `0.08` | Порог обычного `DETECT_ALL` для YOLOE broad-vocab |
+| `context_detect_conf` | `0.25` | Порог DINO office-context, когда цель не найдена, но нужно найти офисные объекты-подсказки |
+| `context_target_promote_conf` | `0.35` | Если context-DINO нашёл `target_like` объект (`office chair` при цели `chair`) не ниже этого порога, он повышается до настоящего target candidate |
+| `auto_context_when_target_absent` | `true` | Если цель не найдена, автоматически собрать `context_marks` для semantic-explore |
+| `finish_on_approach_success` | `true` | Завершить VLM-миссию после успешного финального `DRIVE_TO_VISIBLE`; дальний bounded-step не считается финишем |
+| `approach_max_goal_step_m` | `1.6` | Лимит шага для дальнего `ApproachDetection`, когда финальная точка вне известной свободной карты |
+| `approach_direct_if_goal_in_known_free_map` | `true` | Если финальная standoff-точка находится в known-free области `/map`, ехать к ней напрямую, без bounded-step |
+| `approach_direct_clearance_m` | `0.35` | Минимальный known-free радиус вокруг direct standoff-точки; если рядом unknown/occupied, используется bounded-step |
 | `send_map` | `true` | `false` = не слать карту 2-м изображением (легче запрос; если эндпоинт таймаутит) |
 | `map_max_px` | `384` | Макс. сторона рендера карты |
 | `vlm_timeout_s` | `8.0` | На медленном эндпоинте/с картой подними до `30–60`, иначе circuit-breaker → DEGRADED |
@@ -394,8 +439,8 @@ Nav) · `DETECT_ALL`(детект всех объектов + классы, в n
 > **Цель — ЧИСТЫЙ лейбл объекта** (`bus`, НЕ `find a bus`/`ride to bus`): нормализации запроса нет,
 > YOLOE матчит строку как один класс. `bus` → conf ~0.66; `ride to bus` → ~0.45 (слабее, ложные
 > «доехал» у края кадра). Для target-детекции держите `target_detect_conf:=0.50`;
-> если цель пропадает, временно снижайте до `0.35–0.40`. `DETECT_ALL` оставляйте мягче:
-> `detect_all_conf:=0.12`, иначе обзор сцены станет слишком бедным.
+> если цель пропадает, временно снижайте до `0.35–0.40`. Обычный `DETECT_ALL` держите мягче:
+> `detect_all_conf:=0.08`, иначе обзор сцены станет слишком бедным.
 
 > Замечание по RAM: gz + RTAB-Map + Nav2 + YOLOE вместе требуют >4 ГБ. На хосте с ≤4 ГБ запускайте
 > либо детектор отдельно (мир из 3b), ЛИБО nav-стек, но не всё сразу.
@@ -461,11 +506,40 @@ Nav) · `DETECT_ALL`(детект всех объектов + классы, в n
   ```
   observe@step N: 1 detection(s) best='bus' conf=0.66 @1.68m, notes=2, map=yes -> asking OpenAICompatibleClient
   plan@step N: VLM returned 1 action(s): DRIVE_FORWARD +0.50m
-  step N: DRIVE_FORWARD +0.50m -- <rationale>
+  step N [semantic_explore]: DRIVE_FORWARD +0.50m -- <rationale>
   ```
+  Роль в квадратных скобках показывает смысл действия: `target_approach` — едем к найденной цели,
+  `semantic_explore` — цель не видна, но направление выбрано по объектам-подсказкам в кадре,
+  `blind_scan` — полезных подсказок нет, робот просто сканирует.
   `conf` низкая (≈0.45) → детекция слабая/краевая (см. `target_detect_conf`). `map=no` → карта не пришла
   (`/map` нет или `send_map:=false`). `DEGRADED: ran in FLAT fallback` в конце → VLM-эндпоинт упал
   (circuit-breaker), миссия доехала на mock — подними `vlm_timeout_s` / поставь `send_map:=false`.
+
+### 6c. Persistent VLM mission logger
+`edge_bringup.launch.py` и `vlm_sim_bringup.launch.py` по умолчанию запускают
+`fleet_comms/vlm_mission_logger`. Он пассивно слушает `/vlm/activity` и пишет
+структурированные логи без изображений и без VLM-секретов:
+
+```text
+~/ros2_ws/experiment_logs/vlm_missions/vlm_activity_<run_id>.jsonl
+~/ros2_ws/experiment_logs/vlm_missions/vlm_steps_<run_id>.csv
+```
+
+JSONL хранит все raw-события `/vlm/activity`, а CSV — компактные строки по миссиям,
+шагам, результатам, задержкам, лучшим target/context-детекциям и причинам действий.
+Чтобы имя файла было осмысленным, задавайте `vlm_log_run_id` при запуске edge/sim:
+
+```bash
+ros2 launch ar_project edge_bringup.launch.py vlm_log_run_id:=office_chair_001
+```
+
+Если нужен отдельный ручной logger:
+
+```bash
+ros2 run fleet_comms vlm_mission_logger --ros-args \
+  -p output_dir:=~/ros2_ws/experiment_logs/vlm_missions \
+  -p run_id:=office_chair_001
+```
 
 ## 7. Деградация (FMEA 5.1) — ожидаемое поведение
 Если VLM потерян (таймаут/недоступность → circuit-breaker открывается), orchestrator **защёлкивается

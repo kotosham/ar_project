@@ -11,6 +11,9 @@ from search_coordinator.approach_geometry import (
     backproject_pixel,
     embedded_depth,
     goal_update_needed,
+    occupancy_clearance_status_at_world,
+    occupancy_known_free_at_world,
+    occupancy_value_at_world,
     pixel_age_s,
     quaternion_to_yaw,
     valid_depth,
@@ -67,6 +70,51 @@ def test_approach_goal_inside_offset_holds_position_but_faces_target():
     gx, gy, yaw = approach_goal(0.3, 0.0, 0.0, 0.0, 0.58)
     assert gx == 0.0 and gy == 0.0
     assert math.isclose(yaw, 0.0, abs_tol=1e-9)
+
+
+def test_occupancy_value_at_world_classifies_free_unknown_and_outside():
+    data = [
+        0, -1, 100,
+        0, 10, 20,
+    ]
+    assert occupancy_value_at_world(data, 3, 2, 1.0, 0.0, 0.0, 0.0, 0.5, 0.5) == 0
+    assert occupancy_value_at_world(data, 3, 2, 1.0, 0.0, 0.0, 0.0, 1.5, 0.5) == -1
+    assert occupancy_value_at_world(data, 3, 2, 1.0, 0.0, 0.0, 0.0, 3.5, 0.5) is None
+
+
+def test_occupancy_known_free_at_world_rejects_unknown_and_occupied():
+    data = [0, 20, 65, -1]
+    assert occupancy_known_free_at_world(
+        data, 4, 1, 1.0, 0.0, 0.0, 0.0, 0.5, 0.5, 65)
+    assert occupancy_known_free_at_world(
+        data, 4, 1, 1.0, 0.0, 0.0, 0.0, 1.5, 0.5, 65)
+    assert not occupancy_known_free_at_world(
+        data, 4, 1, 1.0, 0.0, 0.0, 0.0, 2.5, 0.5, 65)
+    assert not occupancy_known_free_at_world(
+        data, 4, 1, 1.0, 0.0, 0.0, 0.0, 3.5, 0.5, 65)
+
+
+def test_occupancy_clearance_status_accepts_known_free_radius():
+    data = [0] * 25
+    ok, status = occupancy_clearance_status_at_world(
+        data, 5, 5, 1.0, 0.0, 0.0, 0.0, 2.5, 2.5, 1.1, 65)
+    assert ok
+    assert status == 'known_free'
+
+
+def test_occupancy_clearance_status_rejects_near_unknown_and_occupied():
+    data = [0] * 25
+    data[2 * 5 + 3] = -1
+    ok, status = occupancy_clearance_status_at_world(
+        data, 5, 5, 1.0, 0.0, 0.0, 0.0, 2.5, 2.5, 1.1, 65)
+    assert not ok
+    assert status == 'unknown'
+
+    data[2 * 5 + 3] = 80
+    ok, status = occupancy_clearance_status_at_world(
+        data, 5, 5, 1.0, 0.0, 0.0, 0.0, 2.5, 2.5, 1.1, 65)
+    assert not ok
+    assert status == 'occupied_80'
 
 
 def test_yaw_quaternion_roundtrip():

@@ -26,7 +26,7 @@ from rclpy.action import ActionClient, ActionServer, CancelResponse, GoalRespons
 from rclpy.callback_groups import ReentrantCallbackGroup
 
 from geometry_msgs.msg import Point, PointStamped, PoseStamped
-from nav_msgs.msg import Odometry
+from nav_msgs.msg import OccupancyGrid, Odometry
 from nav2_msgs.action import NavigateToPose
 from sensor_msgs.msg import CameraInfo, CompressedImage
 from std_msgs.msg import Empty
@@ -381,15 +381,24 @@ class ApproachDetectionServer(SkillServer):
         super().__init__(node, mission_state, nav_driver)
         self._last_pixel = None        # geometry_msgs/PointStamped (x=u,y=v,z=depth_m)
         self._intr = None              # ag.CameraIntrinsics
+        self._last_map = None          # nav_msgs/OccupancyGrid from edge RTAB-Map
         self._sub_group = ReentrantCallbackGroup()
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, node)
         node.declare_parameter('approach_map_frame', 'map')
+        node.declare_parameter('approach_map_topic', '/map')
         node.declare_parameter('approach_camera_frame', 'camera_color_optical_frame')
         node.declare_parameter('approach_robot_frame', 'base_link')
         node.declare_parameter('approach_camera_info_topic', '/camera/camera/color/camera_info')
         node.declare_parameter('approach_min_depth_m', 0.1)
         node.declare_parameter('approach_max_depth_m', 8.0)
+        # Prefer a direct visual approach when the final standoff goal is already
+        # inside known free SLAM space. Otherwise bound the approach to a short
+        # segment so online SLAM can grow before the next re-observation.
+        node.declare_parameter('approach_direct_if_goal_in_known_free_map', True)
+        node.declare_parameter('approach_direct_occupancy_threshold', 65)
+        node.declare_parameter('approach_direct_clearance_m', 0.35)
+        node.declare_parameter('approach_max_goal_step_m', 1.6)
         # A detector with a minimum range (e.g. a billboard/large object that
         # overflows the camera frame at close range) legitimately loses the target
         # in the final stretch of the approach. If we tracked the target until the
@@ -402,12 +411,19 @@ class ApproachDetectionServer(SkillServer):
         node.create_subscription(CameraInfo,
                                  node.get_parameter('approach_camera_info_topic').value,
                                  self._on_info, media_besteffort(), callback_group=self._sub_group)
+        node.create_subscription(OccupancyGrid,
+                                 node.get_parameter('approach_map_topic').value,
+                                 self._on_map, _latched_qos(),
+                                 callback_group=self._sub_group)
 
     def _on_pixel(self, msg):
         self._last_pixel = msg
 
     def _on_info(self, msg):
         self._intr = ag.CameraIntrinsics.from_k(msg.k)
+
+    def _on_map(self, msg):
+        self._last_map = msg
 
     def _pixel_age(self, msg):
         now = self.node.get_clock().now().nanoseconds / 1e9
@@ -432,8 +448,8 @@ class ApproachDetectionServer(SkillServer):
             result.outcome = ApproachDetection.Result.STALE_DETECTION
             return 'abort', result
 
-        pose = self._compute_goal(px, goal.approach_offset)
-        if pose is None:
+        goal_data = self._compute_goal(px, goal.approach_offset)
+        if goal_data is None:
             # cannot compute geometry (no intrinsics / TF) — treat as lost, never
             # drive blindly.
             self.node.get_logger().warn(
@@ -441,10 +457,21 @@ class ApproachDetectionServer(SkillServer):
                 % (self._intr is not None, px.point.z))
             result.outcome = ApproachDetection.Result.LOST_TARGET
             return 'abort', result
+        pose, goal_info = goal_data
+        result.final_distance_m = float(goal_info.get('expected_final_distance_m', 0.0))
+        if goal_info['limited']:
+            limit_note = ' bounded_step=%.2fm target_range=%.2fm reason=%s' % (
+                goal_info['drive_step_m'], goal_info['target_range_m'],
+                goal_info.get('direct_goal_status', 'limited'))
+        elif goal_info.get('direct_goal_status') == 'known_free':
+            limit_note = ' direct_goal=known_free target_range=%.2fm' % (
+                goal_info['target_range_m'])
+        else:
+            limit_note = ''
         self.node.get_logger().info(
-            'approach_detection: px=(%.0f,%.0f) depth=%.2f age=%.2fs -> goal=(%.2f,%.2f) driving'
+            'approach_detection: px=(%.0f,%.0f) depth=%.2f age=%.2fs -> goal=(%.2f,%.2f) driving%s'
             % (px.point.x, px.point.y, px.point.z, age,
-               pose.pose.position.x, pose.pose.position.y))
+               pose.pose.position.x, pose.pose.position.y, limit_note))
 
         # Closest remaining-distance-to-goal at which we still had a FRESH detection.
         # Lets us tell "lost at close range" (legit) from "lost while far" (suspect).
@@ -477,6 +504,7 @@ class ApproachDetectionServer(SkillServer):
                     'approach_detection: SUCCEEDED (reached pose, detection fresh age=%.2fs)'
                     % (cage if cage is not None else -1.0))
                 result.outcome = ApproachDetection.Result.SUCCEEDED
+                result.final_distance_m = float(goal_info.get('expected_final_distance_m', 0.0))
                 result.reached_pose = reached
                 return 'succeed', result
             if tracked['min_fresh_dist'] <= reacquire_dist:
@@ -486,6 +514,7 @@ class ApproachDetectionServer(SkillServer):
                     % (tracked['min_fresh_dist'], reacquire_dist,
                        '%.2fs' % cage if cage is not None else 'none'))
                 result.outcome = ApproachDetection.Result.SUCCEEDED
+                result.final_distance_m = float(goal_info.get('expected_final_distance_m', 0.0))
                 result.reached_pose = reached
                 return 'succeed', result
             self.node.get_logger().warn(
@@ -531,7 +560,27 @@ class ApproachDetectionServer(SkillServer):
         tx, ty = map_pt.point.x, map_pt.point.y
         rx = tf_rob.transform.translation.x
         ry = tf_rob.transform.translation.y
-        gx, gy, yaw = ag.approach_goal(tx, ty, rx, ry, offset if offset > 0 else 0.58)
+        approach_offset = offset if offset > 0 else 0.58
+        dx = tx - rx
+        dy = ty - ry
+        target_range = math.hypot(dx, dy)
+        yaw = math.atan2(dy, dx) if target_range > 1e-6 else 0.0
+        full_gx, full_gy, full_yaw = ag.approach_goal(
+            tx, ty, rx, ry, approach_offset)
+        max_step = float(self.node.get_parameter('approach_max_goal_step_m').value)
+        full_drive = math.hypot(full_gx - rx, full_gy - ry)
+        wants_limit = max_step > 0.0 and full_drive > max_step
+        direct_status = self._direct_goal_status(full_gx, full_gy, map_frame) if wants_limit else ''
+        limited = wants_limit and direct_status != 'known_free'
+        if limited and target_range > 1e-6:
+            scale = max_step / target_range
+            gx = rx + dx * scale
+            gy = ry + dy * scale
+            drive_step = max_step
+        else:
+            gx, gy, yaw = full_gx, full_gy, full_yaw
+            drive_step = math.hypot(gx - rx, gy - ry)
+        expected_final_distance = math.hypot(tx - gx, ty - gy)
         pose = PoseStamped()
         pose.header.frame_id = map_frame
         pose.header.stamp = self.node.get_clock().now().to_msg()
@@ -539,7 +588,41 @@ class ApproachDetectionServer(SkillServer):
         qz, qw = ag.yaw_to_quaternion_zw(yaw)
         pose.pose.orientation.z = qz
         pose.pose.orientation.w = qw
-        return pose
+        return pose, {
+            'limited': limited,
+            'target_range_m': target_range,
+            'drive_step_m': drive_step,
+            'expected_final_distance_m': expected_final_distance,
+            'direct_goal_status': direct_status,
+        }
+
+    def _direct_goal_status(self, gx, gy, map_frame):
+        if not bool(self.node.get_parameter('approach_direct_if_goal_in_known_free_map').value):
+            return 'disabled'
+        grid = self._last_map
+        if grid is None:
+            return 'no_map'
+        if grid.header.frame_id and grid.header.frame_id != map_frame:
+            return 'map_frame_mismatch'
+        info = grid.info
+        origin = info.origin.position
+        yaw = ag.quaternion_to_yaw(info.origin.orientation.z,
+                                   info.origin.orientation.w)
+        value = ag.occupancy_value_at_world(
+            grid.data, info.width, info.height, info.resolution,
+            origin.x, origin.y, yaw, gx, gy)
+        if value is None:
+            return 'outside_map'
+        if value < 0:
+            return 'unknown'
+        threshold = int(self.node.get_parameter(
+            'approach_direct_occupancy_threshold').value)
+        clearance = float(self.node.get_parameter('approach_direct_clearance_m').value)
+        ok, status = ag.occupancy_clearance_status_at_world(
+            grid.data, info.width, info.height, info.resolution,
+            origin.x, origin.y, yaw, gx, gy, clearance,
+            occupied_threshold=threshold)
+        return status if ok else 'clearance_%s' % status
 
 
 def approach_not_reached_outcome_code(have_pixel):

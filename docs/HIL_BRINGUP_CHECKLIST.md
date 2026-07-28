@@ -4,7 +4,7 @@
 
 Уровни: **Pi** запускает executive (`search_coordinator`) + HW-интерфейс ros2_control
 (`embodied_robot_system`) + RealSense + локальный `/scan` + облегчённый Nav2 + `map_odom_relay`.
-**Edge** (GPU-машина) запускает RTAB-Map SLAM + `detect_target_server` (YOLOE) + `planner_orchestrator`.
+**Edge** (GPU-машина) запускает RTAB-Map SLAM + `detect_target_server` (DINO+MobileSAM + YOLOE) + `planner_orchestrator`.
 
 ---
 
@@ -73,7 +73,7 @@
       `DRIVE_TO_VISIBLE(mark_id)` / `DRIVE_FORWARD` / `TURN` / `DETECT_ALL` → `DONE` управляет роботом.
 - [ ] Команды и параметры запуска — `RUNBOOK.md` §4a/§4c. Цель — **чистый лейбл** (`bus`, не `find a bus`);
       на старте полезно `-p async_replan:=false` + дипломные split-пороги из RUNBOOK
-      (`target_detect_conf:=0.50`, `detect_all_conf:=0.12`). Если эндпоинт таймаутит (→ DEGRADED) —
+      (`target_detect_conf:=0.50`, `detect_all_conf:=0.08`). Если эндпоинт таймаутит (→ DEGRADED) —
       `-p send_map:=false` / выше `vlm_timeout_s`.
 
 ## I. Полевая деградация — проверки ROADMAP 6.6 (+ живые 5.1/5.4 на железе)
@@ -89,6 +89,6 @@
 ### Статус симуляции, питающий этот чек-лист (уже зелёный на `robust`)
 Phase 0 (части в sim: `use_sim_time`, сторожевой таймер cmd_vel, collision monitor) ✅ · Phase 1
 (`/scan` локальный, zenoh на одном хосте, QoS+Heartbeat) ✅ · Phase 2 FLAT executive ✅ · Phase 3
-восприятие + Set-of-Mark (живой YOLOE) ✅ · Phase 4 VLM planner (живой qwen3-vl, асинхронный replan) ✅ ·
+восприятие + Set-of-Mark (живой DINO/YOLOE) ✅ · Phase 4 VLM planner (живой qwen3-vl, асинхронный replan) ✅ ·
 Phase 5 FMEA (бесшовная VLM→FLAT вживую; тесты 5.4/5.6/5.7) ✅. Открытый пункт в sim: межхостовой джиттер
 (нужны 2 хоста) — закрывается в C/D выше.

@@ -115,6 +115,7 @@ def _edge_processes(context, *args, **kwargs):
                 '-p', f"detect_conf:={LaunchConfiguration('detect_conf').perform(context)}",
                 '-p', f"target_detect_conf:={LaunchConfiguration('target_detect_conf').perform(context)}",
                 '-p', f"detect_all_conf:={LaunchConfiguration('detect_all_conf').perform(context)}",
+                '-p', f"context_detect_conf:={LaunchConfiguration('context_detect_conf').perform(context)}",
                 '-p', f"vlm_timeout_s:={LaunchConfiguration('vlm_timeout_s').perform(context)}",
                 '-p', f"send_map:={LaunchConfiguration('send_map').perform(context)}",
                 '-p', f"motion_fallback_frame:={LaunchConfiguration('motion_fallback_frame').perform(context)}",
@@ -159,7 +160,8 @@ def generate_launch_description():
         DeclareLaunchArgument('max_steps', default_value='40'),
         DeclareLaunchArgument('detect_conf', default_value='0.0'),
         DeclareLaunchArgument('target_detect_conf', default_value='0.50'),
-        DeclareLaunchArgument('detect_all_conf', default_value='0.12'),
+        DeclareLaunchArgument('detect_all_conf', default_value='0.08'),
+        DeclareLaunchArgument('context_detect_conf', default_value='0.25'),
         DeclareLaunchArgument('vlm_timeout_s', default_value='30.0'),
         DeclareLaunchArgument('send_map', default_value='true'),
         DeclareLaunchArgument('motion_fallback_frame', default_value='odom'),
@@ -167,10 +169,10 @@ def generate_launch_description():
         DeclareLaunchArgument('detector_depth_topic', default_value='/camera/camera/aligned_depth_to_color/image_raw'),
         DeclareLaunchArgument('detector_use_compressed_input', default_value='false'),
         DeclareLaunchArgument('detector_input_reliability', default_value='best_effort'),
-        DeclareLaunchArgument('detector_model_mode', default_value='yoloe'),
+        DeclareLaunchArgument('detector_model_mode', default_value='hybrid_dino_yoloe'),
         DeclareLaunchArgument('detector_conf_default', default_value='-1.0'),
         DeclareLaunchArgument('detector_target_conf_default', default_value='0.50'),
-        DeclareLaunchArgument('detector_vocab_conf_default', default_value='0.12'),
+        DeclareLaunchArgument('detector_vocab_conf_default', default_value='0.08'),
         DeclareLaunchArgument('detector_min_mask_area', default_value='200'),
         DeclareLaunchArgument('detector_use_depth', default_value='true'),
         DeclareLaunchArgument(
@@ -178,6 +180,21 @@ def generate_launch_description():
             default_value='true',
             description='Start robot_health_aggregator + the mission dashboard '
                         '(http://localhost:8088) alongside the sim stack.',
+        ),
+        DeclareLaunchArgument(
+            'start_vlm_logger',
+            default_value='true',
+            description='Persist /vlm/activity as JSONL + compact CSV during VLM sim runs.',
+        ),
+        DeclareLaunchArgument(
+            'vlm_log_output_dir',
+            default_value='~/ros2_ws/experiment_logs/vlm_missions',
+            description='Directory for VLM mission logger artifacts.',
+        ),
+        DeclareLaunchArgument(
+            'vlm_log_run_id',
+            default_value='',
+            description='Optional run id prefix for VLM mission logs. Empty means timestamp.',
         ),
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource(os.path.join(launch_dir, 'flat_sim_bringup.launch.py')),
@@ -206,6 +223,18 @@ def generate_launch_description():
             parameters=[{'use_sim_time': LaunchConfiguration('use_sim_time')}],
             output='screen',
             condition=IfCondition(LaunchConfiguration('start_monitor')),
+        ),
+        Node(
+            package='fleet_comms',
+            executable='vlm_mission_logger',
+            name='vlm_mission_logger',
+            parameters=[{
+                'use_sim_time': LaunchConfiguration('use_sim_time'),
+                'output_dir': LaunchConfiguration('vlm_log_output_dir'),
+                'run_id': LaunchConfiguration('vlm_log_run_id'),
+            }],
+            output='screen',
+            condition=IfCondition(LaunchConfiguration('start_vlm_logger')),
         ),
         OpaqueFunction(function=_edge_processes),
     ])

@@ -70,6 +70,91 @@ def quaternion_to_yaw(qz, qw):
     return math.atan2(2.0 * qw * qz, 1.0 - 2.0 * qz * qz)
 
 
+def occupancy_value_at_world(data, width, height, resolution,
+                             origin_x, origin_y, origin_yaw,
+                             world_x, world_y):
+    """OccupancyGrid value at a world point, or None when outside the grid."""
+    if width <= 0 or height <= 0 or resolution <= 0.0:
+        return None
+    dx = float(world_x) - float(origin_x)
+    dy = float(world_y) - float(origin_y)
+    c = math.cos(-float(origin_yaw))
+    s = math.sin(-float(origin_yaw))
+    mx = c * dx - s * dy
+    my = s * dx + c * dy
+    ix = int(math.floor(mx / float(resolution)))
+    iy = int(math.floor(my / float(resolution)))
+    if ix < 0 or iy < 0 or ix >= int(width) or iy >= int(height):
+        return None
+    idx = iy * int(width) + ix
+    if idx < 0 or idx >= len(data):
+        return None
+    return int(data[idx])
+
+
+def occupancy_known_free_at_world(data, width, height, resolution,
+                                  origin_x, origin_y, origin_yaw,
+                                  world_x, world_y, occupied_threshold=65):
+    """True only for known free OccupancyGrid cells.
+
+    ROS convention: -1 is unknown, 0 is free, values >= occupied_threshold are
+    occupied. Unknown/outside is deliberately not treated as free for direct
+    long visual approaches.
+    """
+    value = occupancy_value_at_world(
+        data, width, height, resolution,
+        origin_x, origin_y, origin_yaw,
+        world_x, world_y)
+    return value is not None and 0 <= value < int(occupied_threshold)
+
+
+def occupancy_clearance_status_at_world(data, width, height, resolution,
+                                        origin_x, origin_y, origin_yaw,
+                                        world_x, world_y, radius_m,
+                                        occupied_threshold=65):
+    """Return whether a circular neighborhood around a point is known free.
+
+    The raw SLAM map can mark a single goal cell as free while Nav2's inflated
+    costmap still rejects the pose. Requiring a small known-free radius prevents
+    long direct visual approaches to standoff poses that are too close to
+    obstacles, unknown space, or the object itself.
+    """
+    radius_m = max(0.0, float(radius_m))
+    center = occupancy_value_at_world(
+        data, width, height, resolution,
+        origin_x, origin_y, origin_yaw,
+        world_x, world_y)
+    if center is None:
+        return False, 'outside_map'
+    if center < 0:
+        return False, 'unknown'
+    if center >= int(occupied_threshold):
+        return False, 'occupied_%d' % center
+    if radius_m <= 0.0:
+        return True, 'known_free'
+
+    if width <= 0 or height <= 0 or resolution <= 0.0:
+        return False, 'outside_map'
+    steps = max(1, int(math.ceil(radius_m / float(resolution))))
+    for ix in range(-steps, steps + 1):
+        for iy in range(-steps, steps + 1):
+            ox = ix * float(resolution)
+            oy = iy * float(resolution)
+            if math.hypot(ox, oy) > radius_m:
+                continue
+            value = occupancy_value_at_world(
+                data, width, height, resolution,
+                origin_x, origin_y, origin_yaw,
+                world_x + ox, world_y + oy)
+            if value is None:
+                return False, 'outside_map'
+            if value < 0:
+                return False, 'unknown'
+            if value >= int(occupied_threshold):
+                return False, 'occupied_%d' % value
+    return True, 'known_free'
+
+
 def goal_update_needed(new_x, new_y, new_yaw, last_x, last_y, last_yaw,
                        min_dist, min_angle):
     """Whether a new goal differs enough from the last to be worth republishing
