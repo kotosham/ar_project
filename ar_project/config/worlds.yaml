@@ -1,0 +1,296 @@
+# ============================================================================
+# КАТАЛОГ МИРОВ ar_project
+#
+# ЗАЧЕМ ЭТОТ ФАЙЛ
+# До него единственным способом узнать, какие миры вообще есть и какие из них
+# рабочие, было открыть каждый .sdf и прочитать. Оператор в консоли выбирает
+# «комнату» одним кликом, поэтому нужен машиночитаемый реестр: что показать в
+# списке, что затемнить как заведомо нерабочее и какое имя мира подставить в
+# gz-сервисы.
+#
+# ЧТО ЗДЕСЬ КРИТИЧНО: world_name
+# Это ТОЧНОЕ значение атрибута <world name='...'> ВНУТРИ файла, а не имя файла.
+# Раннер и launch адресуют Gazebo как /world/<world_name>/create|set_pose|
+# light_config (house.sdf:5-7 отдельно предупреждает, что имя обязано остаться
+# 'house'). У большинства миров внутри написано 'default', хотя файл называется
+# иначе, — при неверном значении всё «работает», но ни одна команда не доходит.
+# ЗНАЧЕНИЕ БЕРИТЕ ИЗ ФАЙЛА, НЕ ПРИДУМЫВАЙТЕ. Проверить:
+#   grep -n "<world name" worlds/<файл>
+# Скрипт scripts/make_world_previews.py сверяет каждое поле world_name с файлом
+# и печатает ПРЕДУПРЕЖДЕНИЕ при расхождении.
+#
+# ИСТОЧНИК ИСТИНЫ ПО КОМНАТАМ
+# AABB комнат house остаются в scripts/house_scenario_runner.py (словарь ROOMS,
+# ~строка 89): предикат in_room — это оракул бенчмарка, по нему уже сняты
+# прогоны, и менять код бенчмарка нельзя. Здесь лежит ВТОРАЯ копия, нужная
+# только для отрисовки плана и подписей в UI; юнит-тест сверяет её с ROOMS.
+# В раннере кортеж — это (x_min, x_max, y_min, y_max); чтобы оси нельзя было
+# перепутать, здесь формат самодокументируемый: {x: [x0, x1], y: [y0, y1]}.
+#
+# КАК ДОБАВИТЬ СВОЙ МИР
+#   1) положить .sdf/.world в ar_project/worlds/;
+#   2) добавить сюда запись, взяв world_name из самого файла;
+#   3) прогнать:  ros2 run ar_project make_world_previews.py
+#      (в исходном дереве:  python3 scripts/make_world_previews.py)
+#      Превью пишутся в worlds/previews/ — они попадают в share через уже
+#      существующий install(DIRECTORY ... worlds ...) в CMakeLists.txt:64-67.
+#
+# О ПОЛЕ size_m
+# Это габариты ЗАМКНУТОЙ области (по внешним стенам), а не пола: пол во всех
+# мирах — плоскость 100x100 м, и по ней габарит был бы бессмысленным. Там, где
+# стен нет вовсе (empty, obstacles*, demo1), указан охват расставленных
+# объектов, и об отсутствии стен сказано в status_note.
+#
+# О ПОЛЯХ preview / preview_svg
+# Значение одно и то же; ключ продублирован намеренно: operator_console читает
+# `preview`, а часть документации ссылается на `preview_svg`. Держите их
+# синхронными.
+# ============================================================================
+
+version: 1
+default: house
+
+worlds:
+
+  # --------------------------------------------------------------- house ----
+  - id: house
+    title: Квартира из шести комнат
+    file: worlds/house.sdf
+    world_name: house           # house.sdf:32, требование зафиксировано в house.sdf:5-7
+    status: ok
+    status_note: Полностью рабочий мир, на нём сняты все прогоны бенчмарка.
+    size_m: [15.0, 10.0]
+    origin_m: [-7.5, -5.0]
+    # x=-7.00 берётся из сценариев s1_far_target.yaml:26, s4_text_hint.yaml:38 и
+    # s5_arrow_signs.yaml:57 — западный торец коридора, самая длинная линия
+    # обзора (14.8 м по шапке house.sdf:16).
+    default_spawn: {x: -7.0, y: 0.0, yaw: 0.0}
+    rooms:
+      hallway:  {x: [-7.40,  7.40], y: [-1.10,  1.10]}
+      bedroom:  {x: [-7.40, -2.00], y: [ 1.10,  4.90]}
+      bathroom: {x: [-2.00,  2.00], y: [ 1.10,  4.90]}
+      kitchen:  {x: [ 2.00,  7.40], y: [ 1.10,  4.90]}
+      storage:  {x: [-7.40, -2.00], y: [-4.90, -1.10]}
+      living:   {x: [-2.00,  7.40], y: [-4.90, -1.10]}
+    room_titles:
+      hallway: Коридор
+      bedroom: Спальня
+      bathroom: Ванная
+      kitchen: Кухня
+      storage: Кладовая
+      living: Гостиная
+    scenarios_supported: true
+    preview: worlds/previews/house.svg
+    preview_svg: worlds/previews/house.svg
+    preview_png: null
+    notes: >-
+      Квартира 15x10 м: шесть комнат, восемь управляемых светильников, потолка
+      нет. Основной мир для VLM-испытаний — только он поддерживает сценарии
+      house_scenario_runner.py.
+
+  # ---------------------------------------------------------- flat_detect ----
+  - id: flat_detect
+    title: Полигон детекции с билбордом
+    file: worlds/flat_detect.world
+    world_name: flat_detect     # flat_detect.world:12
+    status: ok
+    status_note: Рабочий мир, стены низкие (0.5 м) — ими проверяется лидар, а не обзор камеры.
+    size_m: [20.0, 12.0]
+    origin_m: [-10.0, -6.0]
+    default_spawn: {x: 0.0, y: 0.0, yaw: 0.0}
+    rooms: {}
+    room_titles: {}
+    scenarios_supported: false
+    preview: worlds/previews/flat_detect.svg
+    preview_svg: worlds/previews/flat_detect.svg
+    preview_png: null
+    notes: >-
+      Внутренняя камера 8x4 м с четырьмя проходами внутри периметра 20x12 м.
+      В 2 м прямо перед точкой старта стоит билборд detect_billboard с
+      текстурой автобуса (flat_detect.world:132-134) — быстрая проверка того,
+      что детектор вообще видит объект.
+
+  # ---------------------------------------------------------- oscillation ----
+  - id: oscillation
+    title: Полигон гистерезиса фронтиров
+    file: worlds/oscillation.world
+    world_name: oscillation     # oscillation.world:11
+    status: ok
+    status_note: Рабочий мир; отличается от flat_detect только отсутствием билборда.
+    size_m: [20.0, 12.0]
+    origin_m: [-10.0, -6.0]
+    default_spawn: {x: 0.0, y: 0.0, yaw: 0.0}
+    rooms: {}
+    room_titles: {}
+    scenarios_supported: false
+    preview: worlds/previews/oscillation.svg
+    preview_svg: worlds/previews/oscillation.svg
+    preview_png: null
+    notes: >-
+      Та же геометрия, что у flat_detect, но без единого целевого объекта:
+      четыре симметричных прохода заставляют выбор фронтира колебаться —
+      на этом мире и проверяется гистерезис.
+
+  # --------------------------------------------------------------- test_1 ----
+  - id: test_1
+    title: Тестовая арена №1
+    file: worlds/test_1.world
+    world_name: default         # test_1.world:2 — НЕ 'test_1'
+    status: limited
+    status_note: >-
+      Материалы заданы в синтаксисе Gazebo Classic (<script> с
+      file://media/materials/scripts/gazebo.material, test_1.world:65) — gz-sim
+      их не резолвит, стены будут серыми. Геометрия, коллизии и меши работают.
+      Часть реквизита (знак «стоп», урна) стоит СНАРУЖИ стен и роботу
+      недоступна.
+    size_m: [6.75, 6.75]
+    origin_m: [-0.83, -3.19]
+    default_spawn: {x: 2.5, y: 0.2, yaw: 0.0}
+    rooms: {}
+    room_titles: {}
+    scenarios_supported: false
+    preview: worlds/previews/test_1.svg
+    preview_svg: worlds/previews/test_1.svg
+    preview_png: worlds/previews/test_1.png
+    notes: >-
+      Замкнутая деревянная арена 6.75x6.75 м с шестью объектами
+      (конус, знак «стоп», колесо, коробка, гидрант, урна) — базовый мир
+      обхода препятствий.
+
+  # --------------------------------------------------------------- test_2 ----
+  - id: test_2
+    title: Тестовая арена №2
+    file: worlds/test_2.world
+    world_name: default         # test_2.world:2
+    status: limited
+    status_note: >-
+      То же ограничение материалов Gazebo Classic, что и у test_1: стены
+      отрисуются серыми, геометрия и меши работают.
+    size_m: [6.75, 6.75]
+    origin_m: [-0.83, -3.19]
+    default_spawn: {x: 2.5, y: 0.2, yaw: 0.0}
+    rooms: {}
+    room_titles: {}
+    scenarios_supported: false
+    preview: worlds/previews/test_2.svg
+    preview_svg: worlds/previews/test_2.svg
+    preview_png: worlds/previews/test_2.png
+    notes: >-
+      Стены те же, что в test_1, другая расстановка тех же шести объектов —
+      вторая точка данных без смены геометрии.
+
+  # --------------------------------------------------------------- test_3 ----
+  - id: test_3
+    title: Тестовая арена №3, вытянутая
+    file: worlds/test_3.world
+    world_name: default         # test_3.world:2
+    status: limited
+    status_note: >-
+      То же ограничение материалов Gazebo Classic. Дополнительно: барьер
+      jersey_barrier перекрывает южную часть арены, узкие проходы требуют
+      корректного inflation_radius в nav2_params.yaml.
+    size_m: [6.75, 10.8]
+    origin_m: [-1.47, -5.96]
+    default_spawn: {x: 1.9, y: -0.5, yaw: 0.0}
+    rooms: {}
+    room_titles: {}
+    scenarios_supported: false
+    preview: worlds/previews/test_3.svg
+    preview_svg: worlds/previews/test_3.svg
+    preview_png: worlds/previews/test_3.png
+    notes: >-
+      Вытянутая арена 6.75x10.8 м: восемь объектов плюс бетонный блок и
+      дорожный барьер. Самый длинный маршрут из тестовых миров.
+
+  # ---------------------------------------------------------------- empty ----
+  - id: empty
+    title: Пустая площадка
+    file: worlds/empty.world
+    world_name: default         # empty.world:2
+    status: limited
+    status_note: >-
+      В мире только плоскость 100x100 м и солнце (empty.world:29-46). Стен нет,
+      значит фронтиры не замыкаются и SEARCH завершается сразу — для испытаний
+      мир непригоден, оставлен как отладочный «холостой запуск» стека.
+    size_m: [100.0, 100.0]
+    origin_m: [-50.0, -50.0]
+    default_spawn: {x: 0.0, y: 0.0, yaw: 0.0}
+    rooms: {}
+    room_titles: {}
+    scenarios_supported: false
+    preview: worlds/previews/empty.svg
+    preview_svg: worlds/previews/empty.svg
+    preview_png: null
+    notes: >-
+      Годится только чтобы проверить, что Gazebo, мост и URDF поднимаются:
+      искать в нём нечего и некуда ехать.
+
+  # ---------------------------------------------------------------- demo1 ----
+  - id: demo1
+    title: Демо из Fuel (нерабочий)
+    file: worlds/demo1.sdf
+    world_name: demo_world      # demo1.sdf:2
+    status: broken
+    status_note: >-
+      Пять моделей подключены абсолютными путями вида
+      file:///home/user/.gz/fuel/... (demo1.sdf:72-92) — на любой другой машине
+      этих каталогов нет, и мир загрузится пустым. Чинится заменой на
+      model://<имя> с копией модели в ar_project/models.
+    size_m: [0.7, 3.2]
+    origin_m: [2.6, -1.7]
+    default_spawn: {x: 0.0, y: 0.0, yaw: 0.0}
+    rooms: {}
+    room_titles: {}
+    scenarios_supported: false
+    preview: null
+    preview_svg: null
+    preview_png: null
+    notes: >-
+      Стен нет, объекты выстроены в линию на x≈3 м. Оставлен как образец
+      того, чего делать нельзя: абсолютные пути Fuel в SDF.
+
+  # ------------------------------------------------------------ obstacles ----
+  - id: obstacles
+    title: Полоса препятствий (нерабочий)
+    file: worlds/obstacles.world
+    world_name: default         # obstacles.world:2
+    status: broken
+    status_note: >-
+      Мир ссылается на model://construction_barrel (obstacles.world:116), а в
+      ar_project/models такой модели нет — шесть бочек из пятнадцати объектов
+      не загрузятся. Плюс те же материалы Gazebo Classic и полное отсутствие
+      стен.
+    size_m: [8.3, 8.0]
+    origin_m: [-4.0, -2.2]
+    default_spawn: {x: 0.0, y: 0.0, yaw: 0.0}
+    rooms: {}
+    room_titles: {}
+    scenarios_supported: false
+    preview: null
+    preview_svg: null
+    preview_png: null
+    notes: >-
+      Пятнадцать конусов и бочек без стен. Чинится добавлением модели
+      construction_barrel в ar_project/models.
+
+  # --------------------------------------- obstacles_with_seg_tests ---------
+  - id: obstacles_with_seg_tests
+    title: Полоса препятствий с тестами сегментации (нерабочий)
+    file: worlds/obstacles_with_seg_tests.world
+    world_name: default         # obstacles_with_seg_tests.world:2
+    status: broken
+    status_note: >-
+      Та же причина, что у obstacles: model://construction_barrel
+      (obstacles_with_seg_tests.world:116) отсутствует в ar_project/models.
+    size_m: [8.8, 10.2]
+    origin_m: [-4.0, -4.4]
+    default_spawn: {x: 0.0, y: 0.0, yaw: 0.0}
+    rooms: {}
+    room_titles: {}
+    scenarios_supported: false
+    preview: null
+    preview_svg: null
+    preview_png: null
+    notes: >-
+      Расширенный вариант obstacles с дополнительными объектами для проверки
+      сегментации. Чинится так же — добавлением construction_barrel.

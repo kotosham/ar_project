@@ -30,7 +30,34 @@
   <exec_depend>fleet_comms</exec_depend>
   <exec_depend>imu_filter_madgwick</exec_depend>
   <exec_depend>nav_msgs</exec_depend>
+  <!-- Узлы Nav2, которые ПОИМЁННО запускают navigation_launch.py и
+       collision_monitor.launch.py. Раньше здесь стоял только nav2_collision_monitor,
+       и на машине, где Nav2 доставили руками, всё работало — а в образе, где состав
+       пакетов определяет ТОЛЬКО rosdep по этому файлу, launch падал на первой же
+       строке: "package 'nav2_lifecycle_manager' not found". Список должен совпадать
+       с тем, что реально резолвится в launch/. -->
+  <exec_depend>nav2_behaviors</exec_depend>
+  <exec_depend>nav2_bt_navigator</exec_depend>
   <exec_depend>nav2_collision_monitor</exec_depend>
+  <exec_depend>nav2_controller</exec_depend>
+  <exec_depend>nav2_lifecycle_manager</exec_depend>
+  <exec_depend>nav2_planner</exec_depend>
+  <exec_depend>nav2_velocity_smoother</exec_depend>
+  <!-- ПЛАГИНЫ Nav2. Их грузит pluginlib ПО ИМЕНИ КЛАССА из config/nav2_params.yaml,
+       поэтому ни один инструмент не выведет их автоматически — в package.xml они
+       обязаны стоять руками, иначе сервер стартует и падает уже в configure():
+       "Failed to create controller. Exception: ... class dwb_core::DWBLocalPlanner".
+         dwb_core            — FollowPath: dwb_core::DWBLocalPlanner
+         dwb_critics         — критики RotateToGoal/Oscillation/BaseObstacle/
+                               GoalAlign/PathAlign/PathDist/GoalDist
+         dwb_plugins         — генератор траекторий DWB
+         nav2_navfn_planner  — GridBased: nav2_navfn_planner::NavfnPlanner
+       smoother_server и waypoint_follower намеренно НЕ нужны: они выброшены из
+       lifecycle_nodes в navigation_launch.py:44-50. -->
+  <exec_depend>dwb_core</exec_depend>
+  <exec_depend>dwb_critics</exec_depend>
+  <exec_depend>dwb_plugins</exec_depend>
+  <exec_depend>nav2_navfn_planner</exec_depend>
   <exec_depend>pluginlib</exec_depend>
   <exec_depend>python3-numpy</exec_depend>
   <exec_depend>python3-opencv</exec_depend>

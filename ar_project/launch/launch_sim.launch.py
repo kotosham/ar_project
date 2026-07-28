@@ -14,6 +14,7 @@ from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 
 from launch_ros.actions import Node
+from launch_ros.parameter_descriptions import ParameterValue
 
 
 def _get_gazebo_paths():
@@ -151,10 +152,57 @@ def generate_launch_description():
         description='Use gz_ros2_control and ROS diff drive controller for wheel control',
     )
 
+    # Spawn pose. Previously only '-z 0.1' was hard-coded; the benchmark needs to
+    # drop the robot at a scenario-specific place in the house, so expose all four
+    # DOF that ros_gz_sim create understands. Defaults reproduce the old behaviour
+    # exactly (0, 0, 0.1, yaw 0), so existing callers are unaffected.
+    spawn_x = LaunchConfiguration('spawn_x')
+    spawn_y = LaunchConfiguration('spawn_y')
+    spawn_z = LaunchConfiguration('spawn_z')
+    spawn_yaw = LaunchConfiguration('spawn_yaw')
+    spawn_x_arg = DeclareLaunchArgument(
+        'spawn_x', default_value='0.0',
+        description='Robot spawn X in the world frame [m].')
+    spawn_y_arg = DeclareLaunchArgument(
+        'spawn_y', default_value='0.0',
+        description='Robot spawn Y in the world frame [m].')
+    spawn_z_arg = DeclareLaunchArgument(
+        'spawn_z', default_value='0.1',
+        description='Robot spawn Z [m]. 0.1 drops the chassis just above the floor so '
+                    'the wheels settle instead of interpenetrating the ground plane.')
+    spawn_yaw_arg = DeclareLaunchArgument(
+        'spawn_yaw', default_value='0.0',
+        description='Robot spawn yaw [rad].')
+
+    # Camera tuning is only forwarded, never interpreted here; see rsp.launch.py.
+    cam_width = LaunchConfiguration('cam_width')
+    cam_height = LaunchConfiguration('cam_height')
+    cam_rate = LaunchConfiguration('cam_rate')
+    cam_far = LaunchConfiguration('cam_far')
+    depth_far = LaunchConfiguration('depth_far')
+    cam_width_arg = DeclareLaunchArgument(
+        'cam_width', default_value='320', description='Sim RGB+depth image width.')
+    cam_height_arg = DeclareLaunchArgument(
+        'cam_height', default_value='240', description='Sim RGB+depth image height.')
+    cam_rate_arg = DeclareLaunchArgument(
+        'cam_rate', default_value='15', description='Sim camera update rate [Hz].')
+    cam_far_arg = DeclareLaunchArgument(
+        'cam_far', default_value='30.0', description='RGB far clip [m].')
+    depth_far_arg = DeclareLaunchArgument(
+        'depth_far', default_value='8.0', description='Depth far clip [m].')
+
     rsp = IncludeLaunchDescription(
                 PythonLaunchDescriptionSource([os.path.join(
                     get_package_share_directory(package_name),'launch','rsp.launch.py'
-                )]), launch_arguments={'use_sim_time': 'true', 'use_ros2_control': use_ros2_control}.items()
+                )]), launch_arguments={
+                    'use_sim_time': 'true',
+                    'use_ros2_control': use_ros2_control,
+                    'cam_width': cam_width,
+                    'cam_height': cam_height,
+                    'cam_rate': cam_rate,
+                    'cam_far': cam_far,
+                    'depth_far': depth_far,
+                }.items()
     )
 
     cmd_vel_watchdog = Node(
@@ -186,7 +234,11 @@ def generate_launch_description():
         parameters=[{
             'output_frame': 'camera_link',
             'range_min': 0.1,
-            'range_max': 8.0,
+            # Tied to the depth sensor's far clip instead of a second hard-coded
+            # 8.0: a /scan advertising 8 m while the depth image is clipped at,
+            # say, 4 m would make the costmap treat "no return" as "free".
+            # Default depth_far is 8.0, so this is unchanged for every caller.
+            'range_max': ParameterValue(depth_far, value_type=float),
             'scan_height': 10,
             'scan_time': 0.033,
             'use_sim_time': True,
@@ -243,7 +295,10 @@ def generate_launch_description():
     spawn_entity = Node(package='ros_gz_sim', executable='create',
                         arguments=['-topic', 'robot_description',
                                    '-name', 'my_bot',
-                                   '-z', '0.1'],
+                                   '-x', spawn_x,
+                                   '-y', spawn_y,
+                                   '-z', spawn_z,
+                                   '-Y', spawn_yaw],
                         output='screen')
 
     joint_state_broadcaster_spawner = Node(
@@ -294,6 +349,15 @@ def generate_launch_description():
         world_arg,
         gui_arg,
         use_ros2_control_arg,
+        spawn_x_arg,
+        spawn_y_arg,
+        spawn_z_arg,
+        spawn_yaw_arg,
+        cam_width_arg,
+        cam_height_arg,
+        cam_rate_arg,
+        cam_far_arg,
+        depth_far_arg,
         rsp,
         cmd_vel_watchdog,
         twist_mux,

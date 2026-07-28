@@ -45,6 +45,19 @@ def generate_launch_description():
     odom_topic = LaunchConfiguration('odom_topic')
     gui = LaunchConfiguration('gui')
     rviz = LaunchConfiguration('rviz')
+    # Pure pass-through to launch_sim: the spawn pose and the sim camera tuning are
+    # scenario properties, so the top-level bring-up (e.g. house_sim) has to be able
+    # to set them without editing anything below. Defaults are byte-identical to the
+    # launch_sim defaults, so nothing changes for existing callers.
+    spawn_x = LaunchConfiguration('spawn_x')
+    spawn_y = LaunchConfiguration('spawn_y')
+    spawn_z = LaunchConfiguration('spawn_z')
+    spawn_yaw = LaunchConfiguration('spawn_yaw')
+    cam_width = LaunchConfiguration('cam_width')
+    cam_height = LaunchConfiguration('cam_height')
+    cam_rate = LaunchConfiguration('cam_rate')
+    cam_far = LaunchConfiguration('cam_far')
+    depth_far = LaunchConfiguration('depth_far')
 
     declare_use_sim_time = DeclareLaunchArgument(
         'use_sim_time', default_value='true',
@@ -63,10 +76,40 @@ def generate_launch_description():
     declare_rviz = DeclareLaunchArgument(
         'rviz', default_value='false',
         description='Launch RViz after the stack has started. Use rviz:=true for visual debugging.')
+    declare_spawn_x = DeclareLaunchArgument(
+        'spawn_x', default_value='0.0', description='Robot spawn X in the world frame [m].')
+    declare_spawn_y = DeclareLaunchArgument(
+        'spawn_y', default_value='0.0', description='Robot spawn Y in the world frame [m].')
+    declare_spawn_z = DeclareLaunchArgument(
+        'spawn_z', default_value='0.1', description='Robot spawn Z [m].')
+    declare_spawn_yaw = DeclareLaunchArgument(
+        'spawn_yaw', default_value='0.0', description='Robot spawn yaw [rad].')
+    declare_cam_width = DeclareLaunchArgument(
+        'cam_width', default_value='320', description='Sim RGB+depth image width.')
+    declare_cam_height = DeclareLaunchArgument(
+        'cam_height', default_value='240', description='Sim RGB+depth image height.')
+    declare_cam_rate = DeclareLaunchArgument(
+        'cam_rate', default_value='15', description='Sim camera update rate [Hz].')
+    declare_cam_far = DeclareLaunchArgument(
+        'cam_far', default_value='30.0', description='RGB far clip [m].')
+    declare_depth_far = DeclareLaunchArgument(
+        'depth_far', default_value='8.0', description='Depth far clip [m].')
 
     sim = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(os.path.join(launch_dir, 'launch_sim.launch.py')),
-        launch_arguments={'gui': gui, 'world': world}.items())
+        launch_arguments={
+            'gui': gui,
+            'world': world,
+            'spawn_x': spawn_x,
+            'spawn_y': spawn_y,
+            'spawn_z': spawn_z,
+            'spawn_yaw': spawn_yaw,
+            'cam_width': cam_width,
+            'cam_height': cam_height,
+            'cam_rate': cam_rate,
+            'cam_far': cam_far,
+            'depth_far': depth_far,
+        }.items())
 
     rtabmap = TimerAction(period=10.0, actions=[
         IncludeLaunchDescription(
@@ -115,6 +158,15 @@ def generate_launch_description():
         declare_odom_topic,
         declare_gui,
         declare_rviz,
+        declare_spawn_x,
+        declare_spawn_y,
+        declare_spawn_z,
+        declare_spawn_yaw,
+        declare_cam_width,
+        declare_cam_height,
+        declare_cam_rate,
+        declare_cam_far,
+        declare_depth_far,
         sim,
         rtabmap,
         nav2,

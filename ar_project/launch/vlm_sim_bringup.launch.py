@@ -118,6 +118,12 @@ def _edge_processes(context, *args, **kwargs):
                 '-p', f"vlm_timeout_s:={LaunchConfiguration('vlm_timeout_s').perform(context)}",
                 '-p', f"send_map:={LaunchConfiguration('send_map').perform(context)}",
                 '-p', f"motion_fallback_frame:={LaunchConfiguration('motion_fallback_frame').perform(context)}",
+                # The orchestrator grabs its own frames for the VLM (separately from
+                # the detector), so it needs its own topic knob: with the camera
+                # perturbation node in the loop the planner must reason over the
+                # DEGRADED image, otherwise the perturbation experiment is a no-op
+                # for everything except the detector.
+                '-p', f"camera_image_topic:={LaunchConfiguration('orchestrator_camera_image_topic').perform(context)}",
             ],
             env=env,
             name='planner_orchestrator',
@@ -155,7 +161,7 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument('use_mock', default_value='false'),
         DeclareLaunchArgument('async_replan', default_value='false'),
-        DeclareLaunchArgument('replan_every_n', default_value='3'),
+        DeclareLaunchArgument('replan_every_n', default_value='1'),
         DeclareLaunchArgument('max_steps', default_value='40'),
         DeclareLaunchArgument('detect_conf', default_value='0.0'),
         DeclareLaunchArgument('target_detect_conf', default_value='0.50'),
@@ -164,6 +170,12 @@ def generate_launch_description():
         DeclareLaunchArgument('send_map', default_value='true'),
         DeclareLaunchArgument('motion_fallback_frame', default_value='odom'),
         DeclareLaunchArgument('detector_image_topic', default_value='/camera/camera/color/image_raw'),
+        DeclareLaunchArgument(
+            'orchestrator_camera_image_topic',
+            default_value='/camera/camera/color/image_raw',
+            description='Image topic the planner_orchestrator itself looks at. Point it at '
+                        '/camera/camera/color/image_perturbed when sim_perturbations.py runs.',
+        ),
         DeclareLaunchArgument('detector_depth_topic', default_value='/camera/camera/aligned_depth_to_color/image_raw'),
         DeclareLaunchArgument('detector_use_compressed_input', default_value='false'),
         DeclareLaunchArgument('detector_input_reliability', default_value='best_effort'),
@@ -173,6 +185,27 @@ def generate_launch_description():
         DeclareLaunchArgument('detector_vocab_conf_default', default_value='0.12'),
         DeclareLaunchArgument('detector_min_mask_area', default_value='200'),
         DeclareLaunchArgument('detector_use_depth', default_value='true'),
+        # Spawn pose + sim camera tuning: declared here only so a top-level file
+        # (house_sim.launch.py) can set them from one place. Defaults match
+        # flat_sim_bringup/launch_sim exactly - no behaviour change.
+        DeclareLaunchArgument(
+            'spawn_x', default_value='0.0', description='Robot spawn X in the world frame [m].'),
+        DeclareLaunchArgument(
+            'spawn_y', default_value='0.0', description='Robot spawn Y in the world frame [m].'),
+        DeclareLaunchArgument(
+            'spawn_z', default_value='0.1', description='Robot spawn Z [m].'),
+        DeclareLaunchArgument(
+            'spawn_yaw', default_value='0.0', description='Robot spawn yaw [rad].'),
+        DeclareLaunchArgument(
+            'cam_width', default_value='320', description='Sim RGB+depth image width.'),
+        DeclareLaunchArgument(
+            'cam_height', default_value='240', description='Sim RGB+depth image height.'),
+        DeclareLaunchArgument(
+            'cam_rate', default_value='15', description='Sim camera update rate [Hz].'),
+        DeclareLaunchArgument(
+            'cam_far', default_value='30.0', description='RGB far clip [m].'),
+        DeclareLaunchArgument(
+            'depth_far', default_value='8.0', description='Depth far clip [m].'),
         DeclareLaunchArgument(
             'start_monitor',
             default_value='true',
@@ -187,6 +220,15 @@ def generate_launch_description():
                 'odom_topic': LaunchConfiguration('odom_topic'),
                 'gui': LaunchConfiguration('gui'),
                 'rviz': LaunchConfiguration('rviz'),
+                'spawn_x': LaunchConfiguration('spawn_x'),
+                'spawn_y': LaunchConfiguration('spawn_y'),
+                'spawn_z': LaunchConfiguration('spawn_z'),
+                'spawn_yaw': LaunchConfiguration('spawn_yaw'),
+                'cam_width': LaunchConfiguration('cam_width'),
+                'cam_height': LaunchConfiguration('cam_height'),
+                'cam_rate': LaunchConfiguration('cam_rate'),
+                'cam_far': LaunchConfiguration('cam_far'),
+                'depth_far': LaunchConfiguration('depth_far'),
             }.items(),
         ),
         # Monitoring: per-component health rollup + the human-readable web

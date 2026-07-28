@@ -1,0 +1,19 @@
+# p_none -- контрольная группа. Ничего не меняет.
+#
+# Существует как файл (а не только как fallback в раннере), потому что это
+# ОПОРНАЯ точка всех парных метрик: perturbation sensitivity считается как
+# ordered_progress(p_X) - ordered_progress(p_none) при том же сценарии и seed.
+# Значения camera выписаны явно, а не опущены: раннер шлёт профиль целиком,
+# и явный p_none служит документацией нейтрального состояния.
+id: p_none
+title: "Без помех"
+lights_off: []
+spawn: []
+camera:
+  smudge: 0.0
+  blur_sigma: 0.0
+  darkness: 1.0
+  noise_sigma: 0.0
+  dropout_prob: 0.0
+  motion_blur_px: 0
+timeout_scale: 1.0

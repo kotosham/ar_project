@@ -78,8 +78,17 @@ install(
     scripts/cmd_vel_watchdog.py
     scripts/experiment_metrics_logger.py
     scripts/home_pose_manager.py
+    scripts/house_benchmark_report.py
+    scripts/house_scenario_runner.py
+    scripts/make_sign_textures.py
+    # Офлайн-генератор превью миров. Ставится в lib/, чтобы работал
+    # `ros2 run ar_project make_world_previews.py`, но сами превью он по
+    # умолчанию пишет в ИСХОДНЫЙ worlds/previews: install(DIRECTORY ... worlds)
+    # выше (строки 64-67) затирает share при каждой сборке.
+    scripts/make_world_previews.py
     scripts/odom_to_tf.py
     scripts/rtabmap_map_odom_correction_publisher.py
+    scripts/sim_perturbations.py
     scripts/tracker_rgb_bridge.py
     scripts/tracker_rgbd_bridge.py
     scripts/twist_to_twist_stamped.py
