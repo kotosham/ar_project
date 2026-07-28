@@ -1,8 +1,37 @@
 # Автоматическое поднятие стека на ПК. Профили выбирают, что именно поднять:
-#   docker compose --profile sim  up   # весь FLAT в симуляции (один контейнер, CPU)
-#   docker compose --profile edge up   # детектор (GPU) + VLM-оркестратор
-#   docker compose --profile all  up   # всё сразу (тяжело по RAM, см. README)
+#   docker compose --profile console up  # консоль оператора: http://127.0.0.1:8090
+#   docker compose --profile sim  up     # весь FLAT в симуляции (один контейнер, CPU)
+#   docker compose --profile edge up     # детектор (GPU) + VLM-оркестратор
+#   docker compose --profile all  up     # sim + edge сразу (тяжело по RAM, см. README)
+#   docker compose -f docker-compose.yml -f docker-compose.gpu.yml --profile all up
+#   docker compose -f docker-compose.yml -f docker-compose.robot.yml --profile console up
 # Контекст сборки — родитель ar_project (чтобы видеть оба репозитория).
+#
+# ============================================================================
+# ВНИМАНИЕ: профиль `console` НЕСОВМЕСТИМ с профилями `edge` и `all`.
+#
+# Консоль порождает верхний слой САМА (edge_layer.launch.py запускает свои
+# detect_target_server и orchestrator_node подпроцессами внутри контейнера console).
+# Профиль edge/all поднимает ВТОРУЮ пару тех же узлов отдельными контейнерами.
+# В графе оказываются ДВА action-сервера на `detect_target` и ДВА подписчика
+# `/vlm_mission`: клиент уходит к тому серверу, который ответил первым, второй
+# сервер молча простаивает, а миссия ломается БЕЗ единой ошибки в логе —
+# самый дорогой класс поломки из возможных. Поэтому:
+#   МОЖНО:   --profile console            (всё в одном контейнере)
+#   МОЖНО:   --profile sim --profile edge (или просто --profile all)
+#   НЕЛЬЗЯ:  --profile console --profile edge
+#   НЕЛЬЗЯ:  --profile console --profile all
+# run.sh / run.ps1 проверяют это и падают с русским текстом до запуска.
+#
+# ЧЕСТНО ПРО ОГРАНИЧЕНИЯ:
+#  * gui:=true (окно Gazebo) внутри контейнера НЕ РАБОТАЕТ: DISPLAY не пробрасывается,
+#    образ headless. flat_sim_bringup и так стартует с gui:=false; включать gui через
+#    консоль в docker-режиме бессмысленно — процесс поднимется и тут же упадёт.
+#  * Межхостовой zenoh Pi <-> edge в репозитории ЕЩЁ НЕ ВАЛИДИРОВАН: deploy/transport/
+#    README.md:63-65 помечает измерение межхостового джиттера как «в ожидании»
+#    (проверен только один хост в WSL). docker-compose.robot.yml — рабочая гипотеза,
+#    основанная на уже проверенной конфигурации client-режима, а не на замере.
+# ============================================================================
 name: mrn
 
 x-ros-env: &ros-env
@@ -10,6 +39,83 @@ x-ros-env: &ros-env
   RMW_IMPLEMENTATION: ${RMW_IMPLEMENTATION:-rmw_fastrtps_cpp}
 
 services:
+  # Консоль оператора — точка входа для человека. Образ full (Dockerfile target: full)
+  # содержит и симуляцию, и object_tracking, и planner_orchestrator, и /opt/ot_venv,
+  # поэтому ОДИН контейнер умеет и показать страницу, и породить весь стек подпроцессом.
+  console:
+    build:
+      context: ../..
+      dockerfile: ar_project/docker/Dockerfile
+      target: full
+      args:
+        ROS_DISTRO: "${ROS_DISTRO:-jazzy}"
+        TORCH_INDEX_URL: "${TORCH_INDEX_URL:-https://download.pytorch.org/whl/cu124}"
+    image: mrn/console:${ROS_DISTRO:-jazzy}
+    environment:
+      <<: *ros-env
+      # DASHBOARD_URL читает console_node: дефолт ROS-параметра dashboard_url — пустая
+      # строка, и при пустом значении узел берёт эту переменную. Объявлена ИМЕННО в
+      # базовом compose, а не только в robot-оверлее: иначе в симуляции проксирование
+      # /dashboard/ уехало бы на дефолт, который в контейнере может не совпасть с портом.
+      DASHBOARD_URL: "${DASHBOARD_URL:-http://127.0.0.1:8088}"
+      # Пустой токен = проверки нет (порты и так только на 127.0.0.1). Если задан —
+      # консоль требует заголовок X-Console-Token на все /api/* кроме GET /api/state.
+      CONSOLE_TOKEN: "${CONSOLE_TOKEN:-}"
+      # -1 = бесконечный ретрай ожидания роутера вместо падения. Значение >0 блокирует
+      # создание узла и убивает процесс ровно в том сценарии, ради которого консоль и
+      # написана — «включил консоль и жду, пока робота поднимут». Под fastrtps
+      # переменная просто игнорируется, поэтому её безопасно держать в базовом файле.
+      ZENOH_ROUTER_CHECK_ATTEMPTS: "-1"
+    ports:
+      # ТОЛЬКО loopback. У консоли нет аутентификации по умолчанию, а она умеет
+      # ЗАПУСКАТЬ робота; публикация на 0.0.0.0 отдала бы управление стендом всей
+      # подсети. Для доступа с другой машины: ssh -L 8090:127.0.0.1:8090 <хост>.
+      - "127.0.0.1:${CONSOLE_PORT:-8090}:8090"
+      # 8088 — mission_dashboard, который поднимается edge_layer'ом внутри ЭТОГО же
+      # контейнера. Снаружи достаточно 8090 (консоль проксирует дашборд на /dashboard/),
+      # порт открыт для отладки «в обход консоли».
+      - "127.0.0.1:${DASHBOARD_PORT:-8088}:8088"
+    volumes:
+      # Монтируется КАТАЛОГ, а не файл vlm.env. Запись токена делается через
+      # os.replace(tmp, vlm.env) — атомарная подмена inode. Поверх bind-mount ОДНОГО
+      # файла это даёт EBUSY, а если бы и прошло, новый inode не был бы виден хосту:
+      # оператор ввёл бы токен, консоль отчиталась бы об успехе, а на хосте файл остался
+      # прежним. Bind каталога снимает оба эффекта — переименование происходит внутри
+      # смонтированного каталога.
+      - ../../object_tracking/planner_orchestrator:/config
+      # ~/.ros: operator_console.json (выбранный мир, режим, лимиты) и база RTAB-Map.
+      # Named volume нужен, чтобы настройки пережили docker compose down.
+      - console-state:/root/.ros
+      # Веса YOLOE (~600 МБ) не пекутся в образ (см. Dockerfile.dockerignore) — их
+      # монтируем так же, как сервису detector: детектор консоль запускает подпроцессом
+      # из ЭТОГО контейнера, и без весов он упадёт при первой инференции.
+      - ../../object_tracking/object_tracking/object_tracking/model_weights:/ws/install/object_tracking/share/object_tracking/model_weights:ro
+    command:
+      - "ros2"
+      - "run"
+      - "operator_console"
+      - "console_node"
+      - "--ros-args"
+      - "-p"
+      - "bind:=0.0.0.0"
+      - "-p"
+      - "port:=8090"
+      # Путь внутри смонтированного КАТАЛОГА (см. комментарий к volumes выше).
+      - "-p"
+      - "vlm_env_path:=/config/vlm.env"
+      # В образе нет ~/.venvs/ros-jazzy-ml из дефолта конфига — интерпретатор ML-venv
+      # лежит в /opt/ot_venv (Dockerfile, цель full). Передаём явно, чтобы не полагаться
+      # на страховочный симлинк.
+      - "-p"
+      - "venv_python:=/opt/ot_venv/bin/python"
+      - "-p"
+      - "vlm_env_template:=/ws/install/planner_orchestrator/share/planner_orchestrator/vlm.env.example"
+    # Дублируется в каждом сервисе намеренно: YAML-якорь тут не помог бы — merge-ключ
+    # сливает только мэппинги, а shm_size — скалярное поле сервиса.
+    shm_size: "1gb"
+    stop_grace_period: 30s
+    profiles: ["console"]
+
   # Весь FLAT-стек в симуляции (Gazebo + RTAB-Map + Nav2 + executive) одним контейнером.
   # flat_sim_bringup уже запускает gui:=false (headless) — дисплей не нужен.
   sim:
@@ -17,6 +123,8 @@ services:
       context: ../..
       dockerfile: ar_project/docker/Dockerfile
       target: sim
+      args:
+        ROS_DISTRO: "${ROS_DISTRO:-jazzy}"
     image: mrn/sim:${ROS_DISTRO:-jazzy}
     environment: *ros-env
     command: ["ros2", "launch", "ar_project", "flat_sim_bringup.launch.py"]
@@ -25,11 +133,17 @@ services:
     profiles: ["sim", "all"]
 
   # Детектор YOLOE (edge, GPU). Веса монтируются томом в share-путь пакета.
+  # Резервация NVIDIA вынесена в docker-compose.gpu.yml: без неё этот сервис
+  # запускается и на машине без GPU (медленно, на CPU), а с ней compose отказался бы
+  # стартовать везде, где нет nvidia-runtime — включая Apple Silicon.
   detector:
     build:
       context: ../..
       dockerfile: ar_project/docker/Dockerfile
       target: edge
+      args:
+        ROS_DISTRO: "${ROS_DISTRO:-jazzy}"
+        TORCH_INDEX_URL: "${TORCH_INDEX_URL:-https://download.pytorch.org/whl/cu124}"
     image: mrn/edge:${ROS_DISTRO:-jazzy}
     environment: *ros-env
     command:
@@ -40,13 +154,9 @@ services:
       - "use_sim_time:=true"
     volumes:
       - ../../object_tracking/object_tracking/object_tracking/model_weights:/ws/install/object_tracking/share/object_tracking/model_weights:ro
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
+    # Дефолтные 64 МБ /dev/shm — известный источник плавающих падений Fast DDS на
+    # больших сообщениях (изображения, карты). См. house-benchmark-заметки о /dev/shm.
+    shm_size: "1gb"
     profiles: ["edge", "all"]
 
   # VLM-оркестратор (edge). Креды VLM берутся из vlm.env (его содержимое не читается
@@ -58,10 +168,23 @@ services:
       context: ../..
       dockerfile: ar_project/docker/Dockerfile
       target: edge
+      args:
+        ROS_DISTRO: "${ROS_DISTRO:-jazzy}"
+        TORCH_INDEX_URL: "${TORCH_INDEX_URL:-https://download.pytorch.org/whl/cu124}"
     environment: *ros-env
     env_file:
       - path: ../../object_tracking/planner_orchestrator/vlm.env
         required: false
-    command: ["ros2", "run", "planner_orchestrator", "orchestrator_node"]
+    # use_sim_time:=true добавлен, потому что detector уже стартует с ним, а
+    # оркестратор — нет: в профиле sim это были два РАЗНЫХ источника времени, и
+    # сопоставление меток кадра с шагом миссии расходилось.
+    command: ["ros2", "run", "planner_orchestrator", "orchestrator_node",
+              "--ros-args", "-p", "use_sim_time:=true"]
+    shm_size: "1gb"
     depends_on: [detector]
     profiles: ["edge", "all"]
+
+volumes:
+  # Переживает пересоздание контейнера: тут лежит ~/.ros консоли (operator_console.json
+  # с выбранным миром и режимом) и база RTAB-Map симуляции.
+  console-state:

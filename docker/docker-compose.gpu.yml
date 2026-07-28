@@ -1,0 +1,40 @@
+# Оверлей резервации NVIDIA. Применяется поверх базового файла:
+#   docker compose -f docker-compose.yml -f docker-compose.gpu.yml --profile edge up
+#   docker compose -f docker-compose.yml -f docker-compose.gpu.yml --profile console up
+#
+# ПОЧЕМУ ОТДЕЛЬНЫЙ ФАЙЛ. Блок deploy.resources.reservations.devices с driver: nvidia
+# проверяется docker compose ДО старта: на машине без nvidia-container-runtime он даёт
+# отказ ещё на этапе создания контейнера. Держать его в базовом файле значило бы, что
+# `docker compose up` не работает вообще нигде, кроме машин с NVIDIA, — в том числе на
+# Apple Silicon, где nvidia-runtime не существует в принципе. Базовый compose обязан
+# подниматься везде; ускорение — опция, а не условие запуска.
+#
+# БЕЗ ЭТОГО ОВЕРЛЕЯ детектор работает на CPU: медленно (на 640x480 YOLOE на CPU
+# непригоден для реального времени), но стек поднимается и mock/flat-планировщики
+# полностью работоспособны. Сборку под CPU надо запускать с
+#   TORCH_INDEX_URL=https://download.pytorch.org/whl/cpu
+# иначе pip не найдёт колесо cu124.
+#
+# НА macOS ЭТОТ ОВЕРЛЕЙ ПРИМЕНЯТЬ НЕЛЬЗЯ — compose откажется стартовать.
+# run.sh / run.ps1 подмешивают его автоматически и только при наличии nvidia-smi.
+services:
+  detector:
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+  # Консоль запускает детектор ПОДПРОЦЕССОМ внутри своего контейнера (edge_layer),
+  # поэтому GPU надо резервировать и ей — иначе в режиме console видеокарта не видна
+  # тому самому процессу, ради которого оверлей и включают.
+  console:
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
