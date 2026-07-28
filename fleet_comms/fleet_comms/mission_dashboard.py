@@ -37,6 +37,8 @@ from std_msgs.msg import String
 from ar_project_msgs.msg import Heartbeat
 
 from fleet_comms.qos import liveliness_status
+from fleet_comms.ru_labels import COMPONENT_RU, LEVEL_RU
+from fleet_comms.mode_profiles import SIM, profile_for
 
 
 def _latched_sub_qos(depth=1):
@@ -55,8 +57,21 @@ class MissionDashboard(Node):
         super().__init__('mission_dashboard')
         self.declare_parameter('port', 8088)
         self.declare_parameter('bind', '0.0.0.0')
+        # Режим нужен ровно для одного: отличить «компонент отказал» от «этого
+        # источника в данном режиме не существует». В симуляции ekf_odometry и
+        # wheel_odometry КРАСНЫЕ ВСЕГДА (gz_bridge не публикует ни /odometry/filtered,
+        # ни /diff_cont/odom — EKF в sim не запускается, см. mode_profiles), и
+        # дашборд честно рисовал ERROR из /robot_health. Оператор при этом видел
+        # «ОТКАЗ» на исправном стенде и шёл искать поломку, которой нет. Список
+        # берём из mode_profiles, а не повторяем здесь: дельта режимов живёт
+        # ровно в одном месте.
+        self.declare_parameter('mode', SIM)
         self.port = int(self.get_parameter('port').value)
         self.bind = str(self.get_parameter('bind').value)
+        self.mode = str(self.get_parameter('mode').value or SIM)
+        profile = profile_for(self.mode)
+        self.advisory_health = tuple(profile.get('advisory_health', ()))
+        self.misleading_health = dict(profile.get('misleading_health', {}))
 
         self._lock = threading.Lock()
         self._components = {}            # name -> {level, message, values, rx}
@@ -194,7 +209,9 @@ class MissionDashboard(Node):
                 path = self.path.split('?', 1)[0]
                 if path in ('/', '/index.html'):
                     self._send(200, 'text/html; charset=utf-8',
-                               _PAGE.encode('utf-8'))
+                               _render_page(dashboard.advisory_health,
+                                            dashboard.misleading_health)
+                               .encode('utf-8'))
                 elif path == '/state':
                     self._send(200, 'application/json; charset=utf-8',
                                json.dumps(dashboard.snapshot(),
@@ -285,7 +302,7 @@ h2{font-size:14px;color:var(--dim);text-transform:uppercase;letter-spacing:.06em
   <div class="grid" id="beats"></div>
 </div>
 <div>
-  <h2>Что думает и делает VLM</h2>
+  <h2 id="feedTitle">Что думает и делает VLM</h2>
   <div id="feed"></div>
   <h2>Что видит робот</h2>
   <div class="imgs">
@@ -296,15 +313,13 @@ h2{font-size:14px;color:var(--dim);text-transform:uppercase;letter-spacing:.06em
 </div>
 
 <script>
-const RU={realsense:"Камера RealSense",ekf_odometry:"EKF (одометрия)",
- scan:"Лазер-скан (/scan)",control_epos4:"Приводы EPOS4/CAN",
- wheel_odometry:"Колёсная одометрия",slam_correction:"SLAM-коррекция map→odom",
- slam_map:"SLAM-карта (/map)",detection_stream:"Детекции (/target_pixel)",
- cmd_vel:"Команды движения",search_coordinator:"Executive FSM (Pi)",
- planner_orchestrator:"VLM-оркестратор",detector:"Детектор YOLOE",
- nav2:"Nav2 (навигация)",twist_mux:"Twist mux",collision_monitor:"Collision Monitor",
- cmd_vel_watchdog:"Watchdog cmd_vel",slam_rtabmap:"RTAB-Map SLAM (процесс)"};
-const LVL={0:"OK",1:"ВНИМАНИЕ",2:"ОТКАЗ",3:"НЕТ ДАННЫХ"};
+const RU=__RU_COMPONENTS__;
+const LVL=__RU_LEVELS__;
+/* Компоненты, которых в этом режиме нет (в симуляции — EKF и колёсная одометрия).
+   Их «ОТКАЗ» ничего не диагностирует, поэтому показываем нейтрально. */
+const ADVISORY=new Set(__ADVISORY__);
+/* Компоненты, чей зелёный статус значит не то, что кажется. */
+const MISLEADING=__MISLEADING__;
 function el(id){return document.getElementById(id)}
 function esc(s){return String(s??"").replace(/[&<>]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]))}
 function fmtT(ts){const d=new Date(ts*1000);return d.toLocaleTimeString('ru-RU')}
@@ -312,7 +327,8 @@ function evLine(e){
  const t=`<span class="t">${e.stamp?fmtT(e.stamp):""}</span>`;
  switch(e.event){
   case"mission_start":return t+`<span class="tag step">СТАРТ</span> цель «${esc(e.target)}», клиент ${esc(e.client)} (creds: ${esc(e.creds)})`;
-  case"mission_end":return t+`<span class="tag step">ФИНИШ</span> ${e.steps} шагов${e.degraded?' — <b class="tag deg">DEGRADED (FLAT fallback)</b>':""}`;
+  case"mission_end":return t+`<span class="tag step">ФИНИШ</span> ${e.steps} шагов${e.cancelled?' — <b class="tag fail">ПРЕРВАНО ОПЕРАТОРОМ</b>':""}${e.degraded?' — <b class="tag deg">DEGRADED (FLAT fallback)</b>':""}`;
+  case"mission_cancel_requested":return t+`<span class="tag fail">ОТМЕНА</span> оператор прервал миссию; текущий шаг доигрывается, новых не будет`;
   case"observe":{const d=(e.detections||[]).map(x=>`${esc(x.label)} ${x.score}@${x.distance_m}м`).join(", ");
    return t+`<span class="tag observe">ВИЖУ</span> шаг ${e.step}: ${e.n_detections} объект(ов)${d?" — "+d:""}; карта: ${e.map==="yes"?"да":"нет"} → спрашиваю ${esc(e.client)}`}
   case"plan":{const a=(e.actions||[]).map(x=>`<b>${esc(x.action)}</b>${x.rationale?" <i>("+esc(x.rationale)+")</i>":""}`).join("; ");
@@ -338,8 +354,14 @@ function render(s){
   const kv=Object.entries(c.values||{}).filter(([k])=>k!=="detail")
    .map(([k,v])=>`${esc(k)}=${esc(v)}`).join(" · ");
   const det=(c.values||{}).detail||"";
-  return `<div class="card"><div class="nm"><span class="dot lv${c.level}"></span>${esc(RU[c.name]||c.name)} <small style="color:var(--dim)">${LVL[c.level]||c.level}</small></div>
-  <div class="msg">${esc(c.message)}</div>${det?`<div class="kv">${esc(det)}</div>`:""}${kv?`<div class="kv mono">${kv}</div>`:""}</div>`}).join("");
+  // Молчащий advisory-компонент — это «в этом режиме не публикуется», а не отказ:
+  // красный кружок тут отправлял бы оператора искать несуществующую поломку.
+  const na=ADVISORY.has(c.name)&&c.level>=2;
+  const lv=na?3:c.level;
+  const tag=na?"НЕТ В ЭТОМ РЕЖИМЕ":(LVL[c.level]||c.level);
+  const note=MISLEADING[c.name]||"";
+  return `<div class="card"><div class="nm"><span class="dot lv${lv}"></span>${esc(RU[c.name]||c.name)} <small style="color:var(--dim)">${esc(tag)}</small></div>
+  <div class="msg">${esc(c.message)}</div>${det?`<div class="kv">${esc(det)}</div>`:""}${note?`<div class="kv">${esc(note)}</div>`:""}${kv?`<div class="kv mono">${kv}</div>`:""}</div>`}).join("");
  el("beats").innerHTML=Object.entries(s.heartbeats||{}).map(([n,b])=>{
   const lv=b.status==="OK"?0:(b.status==="DEGRADED"?1:2);
   const stale=b.age_s>3;
@@ -352,19 +374,59 @@ function render(s){
   lastSeq=last;
   feed.innerHTML=act.slice().reverse().map(e=>`<div class="ev">${evLine(e)}</div>`).join("");
  }
- if(s.setofmark_age_s!=null){el("som").src="/setofmark.jpg?t="+Date.now();
-  el("somc").textContent=`Set-of-Mark (кадр с метками для VLM), ${s.setofmark_age_s}с назад`}
- if(s.map_age_s!=null){el("map").src="/map.jpg?t="+Date.now();
-  el("mapc").textContent=`Карта, отправленная VLM, ${s.map_age_s}с назад`}
+ // Лента ПЕРЕЖИВАЕТ миссию: после mission_end она продолжает показывать её шаги.
+ // Заголовок в настоящем времени над этим архивом читается как «VLM думает прямо
+ // сейчас», хотя задание никто не давал, — поэтому заголовок honest-по-состоянию.
+ const running=act.length&&act[act.length-1].event!=="mission_end";
+ el("feedTitle").textContent=!act.length?"Что думает и делает VLM"
+  :(running?"Что думает и делает VLM (миссия идёт)"
+           :"Журнал последней миссии (завершена, новых заданий нет)");
+ // Вне миссии оба вида обновляет таймер оркестратора (живой кадр и живой вид
+ // сверху с позой робота), внутри миссии — сам цикл, и там это РОВНО то, что ушло
+ // в модель. Подпись обязана различать эти два случая: «отправлено VLM» над
+ // картинкой, которую VLM никогда не видел, — это ложь в интерфейсе.
+ if(s.setofmark_age_s!=null){el("som").src="setofmark.jpg?t="+Date.now();
+  el("somc").textContent=running?`Set-of-Mark (кадр с метками для VLM), ${s.setofmark_age_s}с назад`
+   :`Вид с камеры робота, ${s.setofmark_age_s}с назад`}
+ if(s.map_age_s!=null){el("map").src="map.jpg?t="+Date.now();
+  el("mapc").textContent=running?`Карта, отправленная VLM, ${s.map_age_s}с назад`
+   :`Вид сверху: карта SLAM и позиция робота, ${s.map_age_s}с назад`}
 }
+// ОТНОСИТЕЛЬНЫЕ пути, а не "/events". Автономно страница отдаётся по "/", так
+// что резолвятся они в те же самые /events и /setofmark.jpg — поведение не
+// меняется. Но когда консоль оператора встраивает этот же дашборд под
+// префиксом /dashboard/, корневые пути ушли бы на корень КОНСОЛИ (там таких
+// маршрутов нет) и страница показывала бы пустой шаблон без единой цифры.
 function connect(){
- const es=new EventSource("/events");
+ const es=new EventSource("events");
  es.onmessage=e=>{try{render(JSON.parse(e.data))}catch(_){}};
  es.onerror=()=>{es.close();setTimeout(connect,2000)};
 }
 connect();
 </script></body></html>
 """
+
+
+def _render_page(advisory=(), misleading=None):
+    """Подставить в страницу русские подписи компонентов из fleet_comms.ru_labels.
+
+    `advisory` — компоненты, которых в текущем режиме физически нет (в симуляции
+    это EKF и колёсная одометрия); страница рисует их нейтрально, а не «ОТКАЗ».
+    `misleading` — компоненты, чья зелёная строка не означает того, что кажется
+    (в симуляции control_epos4 зелёный от /joint_states Gazebo, а не от приводов).
+
+    Раньше эта таблица была JS-литералом прямо в _PAGE. С появлением второго
+    интерфейса (консоль оператора) копия неизбежно отстала бы от имён, которые
+    реально публикует robot_health_aggregator, — поэтому словарь ровно один, и
+    обе страницы рендерятся из него.
+    """
+    return (_PAGE
+            .replace('__RU_COMPONENTS__', json.dumps(COMPONENT_RU, ensure_ascii=False))
+            .replace('__ADVISORY__', json.dumps(list(advisory or ()), ensure_ascii=False))
+            .replace('__MISLEADING__', json.dumps(dict(misleading or {}),
+                                                  ensure_ascii=False))
+            .replace('__RU_LEVELS__', json.dumps(
+                {str(k): v for k, v in LEVEL_RU.items()}, ensure_ascii=False)))
 
 
 def main():
