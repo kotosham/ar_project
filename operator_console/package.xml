@@ -1,0 +1,43 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>operator_console</name>
+  <version>0.0.0</version>
+  <description>Веб-консоль оператора: мастер настройки (режим/планировщик/модель+токен VLM/выбор мира), преflight-проверки ROS-графа, ожидание подключения робота, запуск стека в симуляции, ввод задания и встроенный mission_dashboard. Стандартная библиотека Python, без внешних зависимостей.</description>
+  <maintainer email="denis.deg.08@gmail.com">dende</maintainer>
+  <license>Apache-2.0</license>
+
+  <depend>rclpy</depend>
+  <depend>std_msgs</depend>
+  <!-- Пробы свежести подписываются на LaserScan/JointState/CameraInfo (sensor_msgs),
+       Odometry (nav_msgs) и Clock (rosgraph_msgs). Без этих трёх строк пакет
+       собирается, но console_node падает с ImportError на первой же строке
+       импорта в минимальном образе, где стоит только rclpy. -->
+  <depend>sensor_msgs</depend>
+  <depend>nav_msgs</depend>
+  <depend>rosgraph_msgs</depend>
+  <depend>diagnostic_msgs</depend>
+  <!-- «Засев карты» публикует Twist (sim) / TwistStamped (железо) в
+       cmd_vel_final_topic — см. mode_profiles.PROFILES[*]['cmd_vel_final_topic']. -->
+  <depend>geometry_msgs</depend>
+  <depend>lifecycle_msgs</depend>          <!-- GetState трёх серверов Nav2 -->
+  <!-- ActionClient тянет action_msgs (goal id/status) явно: в минимальном
+       образе он не приезжает транзитивно вместе с rclpy. -->
+  <depend>action_msgs</depend>
+  <depend>ar_project_msgs</depend>          <!-- Heartbeat, action Stop -->
+  <depend>object_tracking_msgs</depend>     <!-- action SeekObject -->
+  <depend>fleet_comms</depend>              <!-- qos, mode_profiles, vlm_env, ru_labels -->
+
+  <exec_depend>ar_project</exec_depend>     <!-- worlds.yaml, превью, launch стека -->
+  <exec_depend>python3-yaml</exec_depend>   <!-- PyYAML идёт вместе с ROS 2, не ставится через pip -->
+  <exec_depend>ros2launch</exec_depend>     <!-- консоль вызывает `ros2 launch` подпроцессом -->
+
+  <test_depend>ament_copyright</test_depend>
+  <test_depend>ament_flake8</test_depend>
+  <test_depend>ament_pep257</test_depend>
+  <test_depend>python3-pytest</test_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>
