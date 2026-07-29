@@ -757,9 +757,29 @@ function missionMsg(text,good){
  b.textContent=text;
  b.className="bigerr on"+(good?" good":"");
 }
+/* Командные глаголы в начале задания. В VLM-режиме текст уходит в детектор КАК
+   ИМЯ КЛАССА: запрос «find toilet» ищет класс «find toilet», которого в словаре
+   нет, и детектор честно возвращает 0 кандидатов на каждом кадре — до конца
+   миссии. Наблюдалось у оператора: 40 шагов, ни одной детекции, финиш по
+   лимиту. Подсказки под полем оказалось мало, поэтому спрашиваем явно. */
+const MISSION_VERB_RE=/^\s*(?:пожалуйста[\s,]*)?(?:найд[иеё]?[а-я]*|отыщ[а-я]+|ищ[иа]|искать|поищи|обнаруж[а-я]+|find|search(?:\s+for)?|locate|look\s+for|go\s+to|drive\s+to|иди\s+к|подойди\s+к|подъедь\s+к|доедь\s+до)\b[\s:,\-–—]*/i;
+function stripMissionVerb(text){return text.replace(MISSION_VERB_RE,"").trim()}
 async function sendMission(){
  const t=el("mission").value.trim();
  if(!t){missionMsg("Задание пустое: впишите, что искать.",false);return}
+ // Только VLM: FLAT-режиму фразу нормализует PromptBridge на роботе.
+ if((S.cfg.planner||"vlm")==="vlm"){
+  const clean=stripMissionVerb(t);
+  if(clean&&clean!==t&&S.missionAsked!==t){
+   S.missionAsked=t;
+   el("mission").value=clean;
+   missionMsg('Похоже на фразу, а не на имя объекта. В VLM-режиме задание уходит '
+     +'в детектор как ИМЯ КЛАССА: «'+t+'» он искать не умеет и вернёт ноль '
+     +'находок на каждом кадре. Подставил «'+clean+'» — нажмите «Отправить '
+     +'задание» ещё раз, чтобы отправить именно его, или впишите своё.',false);
+   return;
+  }
+ }
  const r=await api("POST","/api/mission/start",{text:t});
  if(r.status===200){
   missionMsg("Задание отправлено в "+(r.data.channel||"стек")+". "+(r.data.note_ru||""),true);
