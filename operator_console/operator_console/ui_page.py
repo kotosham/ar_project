@@ -290,6 +290,7 @@ sudo ip link set can0 up type can bitrate 1000000</pre></li>
     <button class="primary" onclick="sendMission()">Отправить задание</button>
     <button class="danger" onclick="stopMission()">Стоп</button>
     <button onclick="seedMap()">Засеять карту (вращение на месте)</button>
+    <button class="danger" id="btnReset" onclick="resetRobot()">Вернуть в исходную точку</button>
   </div>
   <p class="hint">Для VLM-режима нужен ЧИСТЫЙ лейбл объекта, без глаголов («chair», а не «найди стул»). Для FLAT можно фразу — её нормализует PromptBridge. «Засеять карту» крутит робота на месте несколько секунд: в замкнутом помещении поиск не стартует, пока на карте нет ни одной границы известного и неизвестного.</p>
   <div class="bigerr" id="missionMsg"></div>
@@ -341,7 +342,7 @@ const SOURCE_RU={fsm:"исполнительный автомат",vlm:"VLM-ор
    тремя кавычками, и три кавычки подряд оборвали бы её на середине. */
 const ESC={"&":"&amp;","<":"&lt;",">":"&gt;","\u0022":"&quot;","'":"&#39;"};
 const S={cfg:{},worlds:[],worldsDrawn:null,ready:false,missionRunning:false,
-         vlmBaseSeen:null,vlmModelSeen:null,
+         vlmBaseSeen:null,vlmModelSeen:null,missionAsked:null,resetAsked:null,
          step:1,logNext:0,frameLoaded:false};
 
 function el(id){return document.getElementById(id)}
@@ -757,6 +758,32 @@ function missionMsg(text,good){
  b.textContent=text;
  b.className="bigerr on"+(good?" good":"");
 }
+/* Сброс подтверждается вторым нажатием, а не окном confirm(): операция стирает
+   построенную карту, и промах мышью не должен стоить оператору всего прогона.
+   Подтверждение привязано к миру — сменил мир, подтверждай заново. */
+async function resetRobot(){
+ if(S.resetAsked!==(S.cfg.world||"")){
+  S.resetAsked=(S.cfg.world||"");
+  missionMsg('Сброс вернёт робота в точку спавна мира «'+(S.cfg.world||"—")
+    +'», остановит миссию и СОТРЁТ построенную карту вместе с костмапами — '
+    +'иначе SLAM продолжит считать, что робот там, где был, и навигация '
+    +'упрётся в несуществующие стены. Нажмите кнопку ещё раз, чтобы '
+    +'подтвердить.',false);
+  return;
+ }
+ S.resetAsked=null;
+ const btn=el("btnReset");
+ btn.disabled=true;
+ missionMsg("Сбрасываю: останавливаю миссию, переношу робота, забываю карту…",true);
+ try{
+  const r=await api("POST","/api/robot/reset");
+  if(r.status===200){missionMsg(r.data.note_ru||"Сброс выполнен.",true)}
+  else{missionMsg(r.data.error||("Сброс не удался, код "+r.status),false)}
+ }finally{
+  btn.disabled=false;
+ }
+}
+
 /* Командные глаголы в начале задания. В VLM-режиме текст уходит в детектор КАК
    ИМЯ КЛАССА: запрос «find toilet» ищет класс «find toilet», которого в словаре
    нет, и детектор честно возвращает 0 кандидатов на каждом кадре — до конца

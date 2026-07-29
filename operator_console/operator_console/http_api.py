@@ -100,6 +100,7 @@ ROUTES = {
     ('POST', '/api/mission/start'): 'mission_start',
     ('POST', '/api/mission/stop'): 'mission_stop',
     ('POST', '/api/seed_map'): ROUTE_SEED_MAP,
+    ('POST', '/api/robot/reset'): 'robot_reset',
 }
 
 _PREVIEW_SVG = re.compile(r'^/api/worlds/([^/]+)/preview\.svg$')
@@ -420,6 +421,8 @@ def make_handler(backend):
                 json_response(self, 200, call('mission_stop'))
             elif route == ROUTE_SEED_MAP:
                 json_response(self, 200, call('seed_map'))
+            elif route == 'robot_reset':
+                json_response(self, 200, call('robot_reset'))
             elif route == 'dashboard_redirect':
                 # Без завершающего слэша относительные пути страницы дашборда
                 # (mission_dashboard.py:355-365) резолвились бы в корень

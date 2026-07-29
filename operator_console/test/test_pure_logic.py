@@ -614,6 +614,10 @@ class _FakeBackend:
     def seed_map(self):
         return {'ok': True}
 
+    def robot_reset(self):
+        return {'ok': True, 'world': 'flat_detect', 'steps': [],
+                'spawn': {'x': 0.0, 'y': 0.0, 'yaw': 0.0}}
+
     def dashboard_base_url(self):
         return 'http://127.0.0.1:1'          # заведомо мёртвый -> ждём 502
 
@@ -673,6 +677,7 @@ def test_every_route_answers(server):
         ('GET', '/api/stack/status', None), ('GET', '/api/stack/log?since=0', None),
         ('POST', '/api/mission/start', {'text': 'найди стул'}),
         ('POST', '/api/mission/stop', {}), ('POST', '/api/seed_map', {}),
+        ('POST', '/api/robot/reset', {}),
     ]
     for method, path, body in cases:
         status, payload = server.request(path, method, body)
