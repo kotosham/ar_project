@@ -84,7 +84,7 @@ from operator_console.config_store import DEFAULT_CONFIG, ConfigStore
 from operator_console.stack_runner import StackRunner, build_launch_argv
 from operator_console.worlds_catalog import (default_spawn_args,
                                              load_catalog_file, resolve_paths,
-                                             validate)
+                                             rooms_aabb_xxyy, validate)
 
 HEARTBEAT_PERIOD_S = 0.5        # обязан совпадать с продюсером: liveliness_status()
                                 # у издателя и подписчика должны быть одинаковыми,
@@ -109,6 +109,11 @@ MISSION_PUB_WAIT_S = 20.0
 # больше любого шага, но заметно меньше, чем терпение оператора перед
 # неснимаемой блокировкой «миссия уже идёт».
 MISSION_ACTIVITY_STALE_S = 180.0
+# Сколько ждать освобождения оркестратора после «Стоп», прежде чем отказывать в
+# новом задании. 25 с — с запасом к замеренным 9 с: отмена проверяется между
+# атомарными шагами, а шаг может включать запрос к VLM (до vlm_timeout_s = 30 с
+# в пределе) и доводку движения.
+CANCEL_SETTLE_S = 25.0
 # Засев карты: RUNBOOK.md:346-349 крутит робота на месте, чтобы SLAM получил
 # unknown-ячейки и появились фронтиры. Там 5 с в одну сторону и 5 с обратно;
 # здесь суммарные SEED_DURATION_S делятся пополам — вращение остаётся
@@ -615,6 +620,21 @@ class ConsoleBackend:
             entry = self._world_entry(cfg.get('world', ''))
             world_file = resolve_paths(entry, self.share_dir).get('sdf', '') or ''
             extra.update(default_spawn_args(entry))
+            # Комнаты мира уходят планировщику, чтобы он подписывал их на карте.
+            # Это АПРИОРНОЕ знание: робот сам разметку комнат не выводит, её
+            # берут из worlds.yaml. Для практической задачи «найди туалет» так и
+            # надо (человек тоже смотрит на план здания), но для честного
+            # сравнения VLM с FLAT это фора — потому и отдельным аргументом,
+            # который видно в argv запуска.
+            # Формат намеренно не JSON: значение уезжает в `-p name:=value`, а
+            # это YAML, и фигурные скобки с кавычками валят разбор целиком —
+            # оркестратор падал с «Failed to parse global arguments». Здесь ни
+            # одного символа, особенного для YAML: имя|x0,x1,y0,y1;имя|...
+            rooms = rooms_aabb_xxyy(entry)
+            if rooms:
+                extra['rooms_spec'] = ';'.join(
+                    '%s|%.3f,%.3f,%.3f,%.3f' % (name, *rooms[name])
+                    for name in sorted(rooms))
         except KeyError as exc:
             raise ValueError('Мир не выбран или отсутствует в каталоге: %s' % exc)
         for key in ('max_steps', 'replan_every_n', 'vlm_timeout_s'):
@@ -683,6 +703,13 @@ class ConsoleBackend:
         if not text:
             raise ValueError('Задание пустое.')
         node = self._require_node()
+        # Если оператор только что нажал «Стоп» — подождать, а не отказывать.
+        # Оркестратор проверяет флаг отмены МЕЖДУ шагами, и текущий шаг он
+        # доводит до конца: замерено 9 с от «Стоп» до освобождения. Всё это
+        # время прежний код отвечал «Миссия уже идёт (шаг 3)» с неменяющимся
+        # номером шага — со стороны это выглядит как «Стоп не сработал», хотя
+        # он сработал и осталось лишь дождаться.
+        node.wait_after_cancel(CANCEL_SETTLE_S)
         # Проверка «миссия уже идёт» идёт ДО преflight: если задание отвергнуто
         # именно поэтому, оператору нужен этот диагноз, а не общий список
         # проверок, который во время нормально идущей миссии весь зелёный.
@@ -830,6 +857,7 @@ class ConsoleRosNode(Node):
         self._mission_step = 0
         self._mission_target = ''
         self._activity_rx = 0.0
+        self._mission_cancel_rx = 0.0   # когда оркестратор подтвердил отмену
         self._seek_handle = None
         self._odom_pose = None          # {'x','y','yaw','topic'} для плана мира
         self._odom_raw = None           # то же, но БЕЗ вычета нуля
@@ -996,8 +1024,15 @@ class ConsoleRosNode(Node):
                 self._mission_running = True
                 self._mission_step = 0
                 self._mission_target = str(event.get('target', ''))
+                self._mission_cancel_rx = 0.0
             elif name == 'mission_end':
                 self._mission_running = False
+                self._mission_cancel_rx = 0.0
+            elif name == 'mission_cancel_requested':
+                # Оркестратор подтвердил, что отмену увидел. До этого события
+                # консоль о ней не знала вовсе и не могла отличить «оператор
+                # только что нажал Стоп» от «миссия идёт своим ходом».
+                self._mission_cancel_rx = time.monotonic()
             elif name in ('step_start', 'step_result'):
                 try:
                     self._mission_step = int(event.get('step', self._mission_step))
@@ -1109,6 +1144,23 @@ class ConsoleRosNode(Node):
                 return False
             return (time.monotonic() - self._activity_rx) < MISSION_ACTIVITY_STALE_S
 
+    def wait_after_cancel(self, timeout_s):
+        """Дождаться, пока оркестратор отпустит миссию после запрошенной отмены.
+
+        Ждём ТОЛЬКО если отмена действительно запрашивалась: иначе повторная
+        отправка задания во время нормально идущей миссии молча висела бы
+        двадцать секунд вместо честного немедленного отказа.
+        """
+        with self._lock:
+            asked = self._mission_cancel_rx
+        if not asked:
+            return
+        deadline = time.monotonic() + float(timeout_s)
+        while time.monotonic() < deadline:
+            if not self.mission_running():
+                return
+            time.sleep(0.25)
+
     def ensure_idle(self):
         """ValueError, если миссия уже идёт.
 
@@ -1196,6 +1248,13 @@ class ConsoleRosNode(Node):
 
         subscribers = self._cancel_pub.get_subscription_count()
         self._cancel_pub.publish(Empty())
+        # Отметку об отмене ставим ЗДЕСЬ, а не по ответному событию
+        # mission_cancel_requested: событие идёт через оркестратор и приходит
+        # спустя сотни миллисекунд, а оператор жмёт «Отправить задание» сразу
+        # за «Стоп». Ждать подтверждения значит не ждать вовсе — именно так
+        # первая версия и промахивалась.
+        with self._lock:
+            self._mission_cancel_rx = time.monotonic()
         planner_cancelled = subscribers > 0
         if planner_cancelled:
             notes.append('В /vlm_mission/cancel отправлена отмена: оркестратор '

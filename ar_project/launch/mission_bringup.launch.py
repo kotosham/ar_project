@@ -318,6 +318,7 @@ def _bringup(context, *args, **kwargs):
                 'dashboard_port': _arg(context, 'dashboard_port'),
                 'max_steps': _arg(context, 'max_steps'),
                 'replan_every_n': _arg(context, 'replan_every_n'),
+                'rooms_spec': _arg(context, 'rooms_spec'),
                 'vlm_timeout_s': _arg(context, 'vlm_timeout_s'),
                 # Агрегатор здоровья принадлежит НИЖНЕМУ слою: в sim его поднимает
                 # ветка выше, на железе — hardware_bringup.launch.py:194. Второй
@@ -444,6 +445,8 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'max_steps', default_value='40',
             description='Потолок шагов миссии оркестратора.'),
+        DeclareLaunchArgument(
+            'rooms_spec', default_value=''),
         DeclareLaunchArgument(
             'replan_every_n', default_value='1',
             description='Через сколько шагов оркестратор перезапрашивает план у VLM.'),

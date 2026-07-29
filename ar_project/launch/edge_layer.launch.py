@@ -240,6 +240,9 @@ def _edge_processes(context, mode, planner, args):
             '-p', f"detect_conf:={_arg(context, 'detect_conf')}",
             '-p', f"target_detect_conf:={_arg(context, 'target_detect_conf')}",
             '-p', f"detect_all_conf:={_arg(context, 'detect_all_conf')}",
+            # Комнаты мира: планировщик подписывает их на карте, которую видит
+            # модель. Пусто -> подписей нет, карта остаётся чистой SLAM-сеткой.
+            '-p', f"rooms_spec:={_arg(context, 'rooms_spec')}",
         ]
         vlm_model = _arg(context, 'vlm_model')
         if vlm_model:
@@ -356,6 +359,11 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'replan_every_n', default_value='1',
             description='Период перепланирования в шагах.'),
+        DeclareLaunchArgument(
+            'rooms_spec', default_value='',
+            description='Комнаты мира: имя|x0,x1,y0,y1;имя|... — подписи на '
+                        'для подписей на карте планировщика. АПРИОРНОЕ знание: '
+                        'робот его не выводит, оно берётся из worlds.yaml.'),
         DeclareLaunchArgument(
             'vlm_timeout_s', default_value='30.0',
             description='Таймаут запроса к VLM, с.'),
