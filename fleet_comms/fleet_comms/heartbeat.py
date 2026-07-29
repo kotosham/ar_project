@@ -140,18 +140,21 @@ class HeartbeatMonitor:
     def __init__(self, node, expected_period_s: float = 1.0, topic: str = '/heartbeat',
                  stale_factor: float = 2.5, mission_epoch: int = 0):
         self._node = node
-        # Порог = максимум из «фактора x период» и mode_profiles.freshness
-        # ('heartbeat'). Иначе получаем ровно то расхождение, ради которого
-        # mode_profiles и заведён: там записано 3.0 с (и прямо сказано, что это
-        # 2.5 x 0.5 с, округлённое вверх, чтобы одиночная потеря пакета не
-        # красила индикатор), а монитор жил по своим 1.25 с. В симуляции Gazebo,
+        # Порог = максимум из «фактора x период» и порога из mode_profiles.
+        # Иначе получаем ровно то расхождение, ради которого mode_profiles и
+        # заведён: там записано 3.0 с (и прямо сказано, что это 2.5 x 0.5 с,
+        # округлённое вверх, чтобы одиночная потеря пакета не красила
+        # индикатор), а монитор жил по своим 1.25 с. В симуляции Gazebo,
         # RTAB-Map, Nav2, детектор и оркестратор делят один контейнер, таймеры
         # rclpy под нагрузкой плывут, и на 1.25 с STALE ловили ВСЕ продюсеры —
-        # включая search_coordinator, жаловавшийся сам на себя. Преflight от
-        # этого уходил в «НЕ ГОТОВ» на живом стеке. max(), а не замена: порог
-        # может стать только мягче объявленного, но никогда строже.
+        # включая search_coordinator, жаловавшийся сам на себя.
+        # Режим определяем по use_sim_time, а не по отдельному параметру: он
+        # объявлен у КАЖДОГО узла и в симуляции всегда true, так что лишней
+        # ручки, которую можно забыть прокинуть, не появляется.
+        # max(), а не замена: порог может стать только мягче объявленного, но
+        # никогда строже.
         self._stale_ns = max(int(stale_factor * expected_period_s * 1e9),
-                             int(freshness('heartbeat') * 1e9))
+                             int(freshness(self._freshness_key(node)) * 1e9))
         self._nodes = {}
         self._mission_epoch = int(mission_epoch) & UINT32_MASK
         self._ignored_stale_epoch = 0
@@ -202,6 +205,18 @@ class HeartbeatMonitor:
     def _on_liveliness_changed(self, info) -> None:
         if getattr(info, 'alive_count', 1) == 0:
             self._node.get_logger().warn('/heartbeat liveliness LOST — all producers silent')
+
+    @staticmethod
+    def _freshness_key(node) -> str:
+        """'heartbeat_sim' под Gazebo, иначе 'heartbeat'. Узел без объявленного
+        use_sim_time (голый юнит-тест с заглушкой) читается как железо — то есть
+        получает СТРОГИЙ порог: ошибиться в эту сторону безопаснее."""
+        try:
+            if bool(node.get_parameter('use_sim_time').value):
+                return 'heartbeat_sim'
+        except Exception:
+            pass
+        return 'heartbeat'
 
     def get_health(self, node_name: str) -> str:
         h = self._nodes.get(node_name)
