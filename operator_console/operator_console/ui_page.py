@@ -588,7 +588,9 @@ function renderWorldRestart(st){
  if(!box)return;
  const run=runningWorldId(st);
  const show=!!(st&&st.running)&&run&&run!==(S.cfg.world||"");
- box.style.display=show?"":"none";
+ // Именно "block", а не "": у класса .bigerr в CSS стоит display:none, и пустая
+ // строка вернула бы элемент к этому правилу — плашка молча не показывалась бы.
+ box.style.display=show?"block":"none";
  if(show)el("worldRunning").textContent=run;
 }
 
