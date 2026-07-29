@@ -333,7 +333,7 @@ const SOURCE_RU={fsm:"исполнительный автомат",vlm:"VLM-ор
 /* Кавычка задана как ": константа лежит внутри python-строки, открытой
    тремя кавычками, и три кавычки подряд оборвали бы её на середине. */
 const ESC={"&":"&amp;","<":"&lt;",">":"&gt;","\u0022":"&quot;","'":"&#39;"};
-const S={cfg:{},worlds:[],ready:false,step:1,logNext:0,frameLoaded:false};
+const S={cfg:{},worlds:[],worldsDrawn:null,ready:false,step:1,logNext:0,frameLoaded:false};
 
 function el(id){return document.getElementById(id)}
 function esc(s){return String(s==null?"":s).replace(/[&<>"']/g,function(c){return ESC[c]})}
@@ -453,6 +453,14 @@ function applyConfig(cfg){
  el("sumMode").textContent=mode==="sim"?"симуляция":"реальный робот";
  el("sumPlanner").textContent=planner.toUpperCase();
  el("sumWorld").textContent=cfg.world||"—";
+ // Подсветку выбранного мира ставит renderWorlds, а он до этого звался ровно
+ // один раз — из loadWorlds при старте страницы. Клик по карточке менял конфиг
+ // на сервере, но зелёная рамка навсегда оставалась на том мире, который был
+ // выбран в момент загрузки: снаружи это выглядит как «миры не выбираются».
+ // Перерисовываем при смене выбора и только при ней: applyConfig зовётся ещё и
+ // периодическим опросом состояния, а безусловный renderWorlds на каждом тике
+ // ронял бы уже загруженные превью и мигал бы картинками.
+ if(S.worlds.length&&S.worldsDrawn!==(cfg.world||""))renderWorlds();
  const v=cfg.vlm||{};
  if(document.activeElement!==el("vlmBase"))el("vlmBase").value=v.base_url||"";
  setTokenBadge(!!v.token_set);
@@ -603,6 +611,7 @@ async function loadWorlds(){
 }
 function renderWorlds(){
  const cur=S.cfg.world||"";
+ S.worldsDrawn=cur;
  el("worlds").innerHTML=S.worlds.map(function(w){
   const dead=(w.usable===false)||(w.status==="broken");
   const bcls=w.status==="ok"?"ok":(w.status==="broken"?"err":"warn");

@@ -13,6 +13,7 @@ import os
 
 from ar_project_msgs.msg import Heartbeat
 
+from .mode_profiles import freshness
 from .qos import liveliness_status
 
 try:  # rclpy >= Jazzy
@@ -67,7 +68,23 @@ class HeartbeatPublisher:
         self._last_latency_ms = 0.0
         self._mission_epoch = 0
         self._pub = node.create_publisher(Heartbeat, topic, liveliness_status(period_s))
-        self._timer = node.create_timer(period_s, self._tick)
+        # СОБСТВЕННАЯ callback-группа, а не группа ноды по умолчанию. Смысл
+        # heartbeat — «процесс жив»; если тик стоит в общей очереди с рабочей
+        # нагрузкой, он замолкает ровно тогда, когда узел занят, то есть врёт в
+        # худший момент. Так это и ловилось: первый DETECT_ALL в детекторе
+        # тянет текстовый энкодер YOLOE и держит executor ~16 с — heartbeat
+        # пропадал, потребители объявляли детектор STALE, и преflight консоли
+        # выбрасывал живой стек в «НЕ ГОТОВ». С отдельной группой
+        # MultiThreadedExecutor тикает независимо от инференса. Узлам на
+        # SingleThreadedExecutor это не мешает.
+        try:
+            from rclpy.callback_groups import MutuallyExclusiveCallbackGroup
+            self._cb_group = MutuallyExclusiveCallbackGroup()
+            self._timer = node.create_timer(period_s, self._tick,
+                                            callback_group=self._cb_group)
+        except (ImportError, TypeError):
+            self._cb_group = None
+            self._timer = node.create_timer(period_s, self._tick)
 
     def set_status(self, status: int) -> None:
         self._status = int(status)
@@ -123,7 +140,18 @@ class HeartbeatMonitor:
     def __init__(self, node, expected_period_s: float = 1.0, topic: str = '/heartbeat',
                  stale_factor: float = 2.5, mission_epoch: int = 0):
         self._node = node
-        self._stale_ns = int(stale_factor * expected_period_s * 1e9)
+        # Порог = максимум из «фактора x период» и mode_profiles.freshness
+        # ('heartbeat'). Иначе получаем ровно то расхождение, ради которого
+        # mode_profiles и заведён: там записано 3.0 с (и прямо сказано, что это
+        # 2.5 x 0.5 с, округлённое вверх, чтобы одиночная потеря пакета не
+        # красила индикатор), а монитор жил по своим 1.25 с. В симуляции Gazebo,
+        # RTAB-Map, Nav2, детектор и оркестратор делят один контейнер, таймеры
+        # rclpy под нагрузкой плывут, и на 1.25 с STALE ловили ВСЕ продюсеры —
+        # включая search_coordinator, жаловавшийся сам на себя. Преflight от
+        # этого уходил в «НЕ ГОТОВ» на живом стеке. max(), а не замена: порог
+        # может стать только мягче объявленного, но никогда строже.
+        self._stale_ns = max(int(stale_factor * expected_period_s * 1e9),
+                             int(freshness('heartbeat') * 1e9))
         self._nodes = {}
         self._mission_epoch = int(mission_epoch) & UINT32_MASK
         self._ignored_stale_epoch = 0
