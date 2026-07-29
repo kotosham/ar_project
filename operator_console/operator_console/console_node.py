@@ -979,6 +979,12 @@ class ConsoleRosNode(Node):
             pose, rx = self._odom_pose, self._odom_rx
         snapshot['robot_pose'] = (dict(pose, age_s=round(time.monotonic() - rx, 1))
                                   if pose else None)
+        # Идёт ли миссия ПРЯМО СЕЙЧАС. Нужно интерфейсу, чтобы не запирать шаг
+        # «Работа» на непройденном преflight, пока робот едет: иначе оператор,
+        # обновивший страницу (или переживший переподключение SSE), попадает на
+        # шаг 1 и физически не может дотянуться до кнопки «Стоп» — единственной,
+        # которая ему в этот момент и нужна.
+        snapshot['mission_running'] = self.mission_running()
         return snapshot
 
     # -- миссия --------------------------------------------------------------

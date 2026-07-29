@@ -293,6 +293,13 @@ sudo ip link set can0 up type can bitrate 1000000</pre></li>
   </div>
   <p class="hint">Для VLM-режима нужен ЧИСТЫЙ лейбл объекта, без глаголов («chair», а не «найди стул»). Для FLAT можно фразу — её нормализует PromptBridge. «Засеять карту» крутит робота на месте несколько секунд: в замкнутом помещении поиск не стартует, пока на карте нет ни одной границы известного и неизвестного.</p>
   <div class="bigerr" id="missionMsg"></div>
+  <!-- Потеря готовности ПОКАЗЫВАЕТСЯ здесь, а не выкидывает оператора на шаг
+       «Подключение». Выкидывало раньше: render() зовётся на каждом кадре SSE, и
+       одного мигания преflight хватало, чтобы сорвать человека с рабочего
+       экрана — причём миссия в этот момент продолжала идти, а наблюдать за ней
+       он уже не мог. Войти в шаг 6 без зелёного преflight по-прежнему нельзя:
+       это разные вещи — пускать в работу и выгонять из неё. -->
+  <div class="bigerr" id="workDegraded" style="display:none"></div>
   <div class="mline" id="missionLine">Миссия: —</div>
 
   <!-- ФАКТИЧЕСКОЕ положение робота на плане мира. Сознательно НЕ карта SLAM:
@@ -333,7 +340,9 @@ const SOURCE_RU={fsm:"исполнительный автомат",vlm:"VLM-ор
 /* Кавычка задана как ": константа лежит внутри python-строки, открытой
    тремя кавычками, и три кавычки подряд оборвали бы её на середине. */
 const ESC={"&":"&amp;","<":"&lt;",">":"&gt;","\u0022":"&quot;","'":"&#39;"};
-const S={cfg:{},worlds:[],worldsDrawn:null,ready:false,step:1,logNext:0,frameLoaded:false};
+const S={cfg:{},worlds:[],worldsDrawn:null,ready:false,missionRunning:false,
+         vlmBaseSeen:null,vlmModelSeen:null,
+         step:1,logNext:0,frameLoaded:false};
 
 function el(id){return document.getElementById(id)}
 function esc(s){return String(s==null?"":s).replace(/[&<>"']/g,function(c){return ESC[c]})}
@@ -380,7 +389,13 @@ function stepVisible(n){
  if(n===4)return (S.cfg.mode||"sim")==="sim";
  return true;
 }
-function stepLocked(n){return n===6&&!S.ready}
+/* Шаг «Работа» закрыт, пока преflight не зелёный, — но НЕ когда робот уже едет.
+   Идущая миссия важнее запрета: после F5 (или переподключения SSE) boot()
+   ставит шаг 1, и оператор с едущим роботом упирался в «открывается, когда
+   преflight зелёный» — то есть не мог нажать единственную нужную ему кнопку
+   «Стоп». Запрет защищает от НАЧАЛА работы на неготовом стеке; остановить уже
+   начатую он мешать не должен. */
+function stepLocked(n){return n===6&&!S.ready&&!S.missionRunning}
 function go(n){
  // Скрытый шаг перепрыгивается В ТУ ЖЕ сторону, куда шёл оператор: иначе
  // «Назад» с шага 5 в режиме железа (где шаг «Мир» скрыт) возвращало бы на
@@ -404,11 +419,18 @@ function go(n){
  renderStepper();
 }
 function renderStepper(){
- el("stepper").innerHTML=STEPS.filter(function(s){return stepVisible(s.n)}).map(function(s){
+ const html=STEPS.filter(function(s){return stepVisible(s.n)}).map(function(s){
   const cls=(s.n===S.step?" on":"")+(stepLocked(s.n)?" locked":"");
   return '<li class="'+cls.trim()+'" onclick="go('+s.n+')"><span class="num">'+s.n+
          '</span><span>'+esc(s.t)+'</span></li>';
  }).join("");
+ // Переписываем innerHTML ТОЛЬКО при реальном изменении. renderStepper зовётся
+ // из applyConfig, то есть на каждом кадре SSE — примерно раз в секунду. Клик
+ // состоит из mousedown и mouseup по ОДНОМУ узлу: если между ними список
+ // пересобран, <li> уже другой объект и события click не будет. Снаружи это
+ // ровно «пункты мастера не нажимаются, жму по три раза».
+ const box=el("stepper");
+ if(box.innerHTML!==html)box.innerHTML=html;
 }
 
 /* ---- конфигурация -------------------------------------------------------- */
@@ -461,10 +483,17 @@ function applyConfig(cfg){
  // периодическим опросом состояния, а безусловный renderWorlds на каждом тике
  // ронял бы уже загруженные превью и мигал бы картинками.
  if(S.worlds.length&&S.worldsDrawn!==(cfg.world||""))renderWorlds();
+ // Поля VLM обновляются, только когда изменилось СЕРВЕРНОЕ значение. Защиты по
+ // document.activeElement мало: applyConfig зовётся на каждом кадре SSE, и
+ // стоило оператору увести фокус (например, нажать «Проверить связь»), как
+ // набранный адрес возвращался к сохранённому. У выпадающего списка моделей не
+ // было и этого — sel.value переставлялся раз в секунду прямо под курсором,
+ // из-за чего выбранная модель «сама возвращалась» на прежнюю.
  const v=cfg.vlm||{};
- if(document.activeElement!==el("vlmBase"))el("vlmBase").value=v.base_url||"";
+ const base=v.base_url||"";
+ if(S.vlmBaseSeen!==base){S.vlmBaseSeen=base;el("vlmBase").value=base}
  setTokenBadge(!!v.token_set);
- if(v.model)ensureModelOption(v.model);
+ if(v.model&&S.vlmModelSeen!==v.model){S.vlmModelSeen=v.model;ensureModelOption(v.model)}
  renderStepper();
 }
 function setTokenBadge(on){
@@ -805,11 +834,13 @@ function renderChecks(p){
   plate.textContent=n?("НЕ ГОТОВ: "+n+" блокирующих"):"ЖДУ ДАННЫХ";
  }
  S.ready=!!p.ready;
- el("btnGo6").disabled=!S.ready;
+ el("btnGo6").disabled=stepLocked(6);
 }
 
 /* ---- общий рендер кадра -------------------------------------------------- */
 function render(s){
+ // ДО renderChecks: от этого флага зависит и замок шага 6, и кнопка «Далее».
+ S.missionRunning=!!s.mission_running;
  if(s.config)applyConfig(s.config);
  renderChecks(s.preflight||{});
  renderLink(s.link||{});
@@ -831,7 +862,31 @@ function render(s){
            :((s.ros_connected!=null)?s.ros_connected:(s.preflight||{}).ros_connected);
  const why=ros.reason_ru||s.reason_ru||"узел ещё не создан";
  el("sumRos").textContent="ROS: "+(conn===false?("нет — "+why):(conn===true?"да":"—"));
- if(stepLocked(S.step))go(S.step-1);
+ renderWorkDegraded(s);
+}
+/* Шаг 6 с потерянной готовностью: предупреждаем, но не выгоняем. Список
+   блокирующих проверок берём из того же преflight, что и шаг 5, — оператор
+   должен видеть ПРИЧИНУ, не переключая экран. */
+function renderWorkDegraded(s){
+ const box=el("workDegraded");
+ if(!box)return;
+ if(S.step!==6||S.ready){box.style.display="none";return}
+ const pf=(s&&s.preflight)||{};
+ // Берём ТОТ ЖЕ p.blocking, по которому считает плашку шаг 5, а не фильтруем
+ // checks заново: level — строка ('ok'/'warn'/'error'/'wait'), а не число, и
+ // заголовок лежит в c.title. Своя арифметика по уровням здесь уже один раз
+ // молча дала NaN и плашка вообще не называла причину.
+ const by={};
+ (pf.checks||[]).forEach(function(c){by[c.id]=c});
+ const bad=(pf.blocking||[]).map(function(id){
+  const c=by[id];
+  return c?((c.title||id)+" — "+(c.message||"")):id;
+ });
+ box.style.display="block";
+ box.textContent="Преflight потерял готовность"
+   +(bad.length?(": "+bad.join("; ")):"")
+   +". Стек и миссия продолжают работать — экран не переключён намеренно, "
+   +"чтобы не терять из виду идущую миссию.";
 }
 
 /* Переподключение — та же схема, что в mission_dashboard.py:360-365: закрыть

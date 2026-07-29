@@ -320,11 +320,15 @@ def check_health(snapshot, mode, planner):
             hint='В симуляции его поднимает vlm_sim_bringup (start_monitor), '
                  'на железе — hardware_bringup.launch.py:194.')]
 
-    if float(health_age) > freshness('health'):
+    # Порог по режиму — см. mode_profiles: агрегатор тикает по СИМУЛЯЦИОННОМУ
+    # времени, а возраст здесь меряется стенными часами, поэтому при RTF<1
+    # единый порог 3.0 с ложно краснел на живом агрегаторе.
+    health_limit = freshness('health_sim' if mode == SIM else 'health')
+    if float(health_age) > health_limit:
         checks.append(Check(
             'health', 'Здоровье робота', LEVEL_ERROR,
             '/robot_health устарел: последнее сообщение %.1f с назад (порог %.1f с) '
-            '— агрегатор перестал публиковать.' % (health_age, freshness('health')),
+            '— агрегатор перестал публиковать.' % (health_age, health_limit),
             hint='Проверьте узел robot_health_aggregator: если он жив, а сообщений '
                  'нет, значит он завис на пробе.'))
     else:
@@ -382,12 +386,33 @@ def check_nav2(snapshot, mode):
             'Nav2 ещё не отвечает на запрос состояния — серверы не подняты либо '
             'не видны в графе.',
             hint='Проверить руками: ros2 lifecycle get /planner_server')
+    # 'unknown' — это НЕ состояние Nav2, а признак «консоль не смогла спросить»:
+    # console_node ставит его, когда сервис не найден в этот миг, когда истёк
+    # LIFECYCLE_CALL_TIMEOUT_S и при любом исключении. В симуляции три сервера
+    # Nav2 делят контейнер с Gazebo, RTAB-Map, детектором и оркестратором, и
+    # неотвеченный get_state — событие конкуренции за CPU, а не деактивация.
+    # Смешивать это с настоящим inactive нельзя: один медленный ответ при двух
+    # живых серверах давал красное «цели навигации они не примут» и блокировал
+    # готовность, хотя навигация работает.
+    unknown = sorted(n for n, s in states.items() if s == 'unknown')
     bad = ['%s=%s' % (node, state) for node, state in sorted(states.items())
-           if state != 'active']
-    if not bad:
+           if state != 'active' and state != 'unknown']
+    if not bad and not unknown:
         return Check('nav2', 'Nav2', LEVEL_OK,
                      'Все серверы Nav2 активны (%s).'
                      % ', '.join(sorted(states)))
+    if not bad:
+        # Именно WARN, а не WAIT: WAIT попадает в blocking наравне с ERROR
+        # (см. evaluate), то есть точно так же запирал бы готовность. Утверждать
+        # отказ мы не можем — мы просто не получили ответ от одного сервера, —
+        # а раз не можем, то и запрещать пуск не вправе. Если Nav2 действительно
+        # не активирован, это немедленно проявится: цель не будет принята, и
+        # оператор увидит это в журнале миссии.
+        return Check(
+            'nav2', 'Nav2', LEVEL_WARN,
+            'Состояние Nav2 опрошено не полностью (%s): остальные серверы '
+            'активны. Обычно это занятый CPU, а не отказ.' % ', '.join(unknown),
+            hint='Проверить руками: ros2 lifecycle get /controller_server')
     return Check(
         'nav2', 'Nav2', LEVEL_ERROR,
         'Nav2 не активирован: %s. Узлы в графе есть, но цели навигации они не '
@@ -396,7 +421,7 @@ def check_nav2(snapshot, mode):
              '(bond timeout) и остановил активацию всей цепочки.')
 
 
-def check_planner_nodes(snapshot, planner):
+def check_planner_nodes(snapshot, planner, mode=SIM):
     """Детектор и оркестратор — по heartbeat, а не по присутствию в графе:
     процесс может быть жив и при этом не считать (ML-venv не поднялся, модель не
     загрузилась). heartbeat даёт статус и возраст."""
@@ -415,7 +440,15 @@ def check_planner_nodes(snapshot, planner):
             'него не требуются.'))
         return checks
 
-    limit = freshness('heartbeat')
+    # Тот же порог, по которому живут robot_health_aggregator и
+    # search_coordinator (fleet_comms/heartbeat.py). Раньше здесь стояло жёстко
+    # 'heartbeat' = 3.0 с, и консоль оставалась строже всего остального стека:
+    # мониторы уже молчали, а преflight всё ещё объявлял «НЕ ГОТОВ» и выбрасывал
+    # оператора с шага «Работа» посреди идущей миссии. Причина мигания —
+    # питоновские колбэки детектора, которые держат GIL дольше 3 с (первый
+    # DETECT_ALL, тяжёлый кадр), и это симуляционная плата за общий контейнер,
+    # а не отказ узла.
+    limit = freshness('heartbeat_sim' if mode == SIM else 'heartbeat')
     for name, check_id in wanted:
         title = ru_component(name)
         beat = beats.get(name)
@@ -642,7 +675,7 @@ def evaluate(snapshot, mode, planner, *, now=None, edge_host=None, tcp_probe=Non
             checks.append(maybe)
     checks.extend(check_health(snapshot, mode, planner))
     checks.append(check_nav2(snapshot, mode))
-    checks.extend(check_planner_nodes(snapshot, planner))
+    checks.extend(check_planner_nodes(snapshot, planner, mode))
     checks.extend(check_vlm_creds(snapshot, planner))
     checks.append(check_frontiers(snapshot, planner))
     checks.append(check_mission_epoch(snapshot))
