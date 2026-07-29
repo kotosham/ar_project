@@ -458,6 +458,7 @@ class ApproachDetectionServer(SkillServer):
             result.outcome = ApproachDetection.Result.LOST_TARGET
             return 'abort', result
         pose, goal_info = goal_data
+        result.bounded_step = bool(goal_info.get('limited', False))
         result.final_distance_m = float(goal_info.get('expected_final_distance_m', 0.0))
         if goal_info['limited']:
             limit_note = ' bounded_step=%.2fm target_range=%.2fm reason=%s' % (

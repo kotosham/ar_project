@@ -237,24 +237,12 @@ set -a
 source ~/ros2_ws/src/object_tracking/planner_orchestrator/vlm.env
 set +a
 
-/home/user/.venvs/ros-jazzy-ml/bin/python -m planner_orchestrator.orchestrator_node \
-  --ros-args \
-  -p use_sim_time:=false \
-  -p use_mock:=false \
-  -p async_replan:=false \
-  -p replan_every_n:=3 \
-  -p max_steps:=40 \
-  -p detect_conf:=0.0 \
-  -p target_detect_conf:=0.50 \
-  -p detect_all_conf:=0.08 \
-  -p context_detect_conf:=0.25 \
-  -p vlm_timeout_s:=30.0 \
-  -p send_map:=true \
-  -p motion_fallback_frame:=odom \
-  -p approach_max_goal_step_m:=1.2 \
-  -p context_target_promote_conf:=0.30 \
-  -p camera_image_topic:=/camera_edge/color/image_raw
+/home/user/.venvs/ros-jazzy-ml/bin/python -m planner_orchestrator.orchestrator_node
 ```
+
+Для VLM hardware-режима рабочие значения уже зашиты дефолтами: edge-camera
+`/camera_edge/color/image_raw`, `async_replan=false`, `vlm_timeout_s=30.0`,
+`context_detect_conf=0.35`, `approach_max_goal_step_m=1.2`.
 
 **Edge T4 — RViz**
 
@@ -367,11 +355,7 @@ ros2 topic pub --once /vlm_mission std_msgs/msg/String "{data: bus}"
 ```bash
 # detector running (3b) + executive up. In the orchestrator shell:
 set -a; source object_tracking/planner_orchestrator/vlm.env; set +a   # loads VLM_* (never printed)
-/home/user/.venvs/ros-jazzy-ml/bin/python -m planner_orchestrator.orchestrator_node \
-  --ros-args -p use_sim_time:=true -p use_mock:=false -p replan_every_n:=3 -p max_steps:=40 \
-  -p async_replan:=false -p detect_conf:=0.0 \
-  -p target_detect_conf:=0.50 -p detect_all_conf:=0.08 -p context_detect_conf:=0.25 \
-  -p approach_max_goal_step_m:=1.6
+/home/user/.venvs/ros-jazzy-ml/bin/python -m planner_orchestrator.orchestrator_node
 # expect: "planner_orchestrator up ... client=OpenAICompatibleClient creds=env"
 ros2 topic pub --once /vlm_mission std_msgs/msg/String "{data: bus}"   # ЧИСТЫЙ лейбл (см. ниже)
 ```
@@ -420,20 +404,20 @@ standoff-точки нет свободного радиуса `approach_direct_
 #### Ключевые параметры orchestrator
 | Параметр | Деф. | Зачем |
 |---|---|---|
-| `async_replan` | `true` | `false` = дискретные шаги (едь→стоп→свежее наблюдение→думай). Для наблюдения/сравнения ставь `false` |
+| `async_replan` | `false` | `false` = дискретные шаги (едь→стоп→свежее наблюдение→думай). `true` включает overlap replan, но сложнее анализировать логи |
 | `detect_conf` | `0.0` | Legacy override: если >0, одним числом переопределяет оба порога ниже |
 | `target_detect_conf` | `0.50` | Порог конкретной цели для DINO+MobileSAM (`chair`, `drawer cabinet`) — как в базовой дипломной реализации |
 | `detect_all_conf` | `0.08` | Порог обычного `DETECT_ALL` для YOLOE broad-vocab |
-| `context_detect_conf` | `0.25` | Порог DINO office-context, когда цель не найдена, но нужно найти офисные объекты-подсказки |
+| `context_detect_conf` | `0.35` | Порог DINO office-context, когда цель не найдена, но нужно найти офисные объекты-подсказки |
 | `context_target_promote_conf` | `0.35` | Если context-DINO нашёл `target_like` объект (`office chair` при цели `chair`) не ниже этого порога, он повышается до настоящего target candidate |
 | `auto_context_when_target_absent` | `true` | Если цель не найдена, автоматически собрать `context_marks` для semantic-explore |
 | `finish_on_approach_success` | `true` | Завершить VLM-миссию после успешного финального `DRIVE_TO_VISIBLE`; дальний bounded-step не считается финишем |
-| `approach_max_goal_step_m` | `1.6` | Лимит шага для дальнего `ApproachDetection`, когда финальная точка вне известной свободной карты |
+| `approach_max_goal_step_m` | `1.2` | Лимит шага для дальнего `ApproachDetection`, когда финальная точка вне известной свободной карты |
 | `approach_direct_if_goal_in_known_free_map` | `true` | Если финальная standoff-точка находится в known-free области `/map`, ехать к ней напрямую, без bounded-step |
 | `approach_direct_clearance_m` | `0.35` | Минимальный known-free радиус вокруг direct standoff-точки; если рядом unknown/occupied, используется bounded-step |
 | `send_map` | `true` | `false` = не слать карту 2-м изображением (легче запрос; если эндпоинт таймаутит) |
 | `map_max_px` | `384` | Макс. сторона рендера карты |
-| `vlm_timeout_s` | `8.0` | На медленном эндпоинте/с картой подними до `30–60`, иначе circuit-breaker → DEGRADED |
+| `vlm_timeout_s` | `30.0` | На медленном эндпоинте/с картой можно поднять до `60`, иначе circuit-breaker → DEGRADED |
 | `replan_every_n` | `3` | Реальная VLM всё равно отдаёт 1 действие за вызов |
 
 > **Цель — ЧИСТЫЙ лейбл объекта** (`bus`, НЕ `find a bus`/`ride to bus`): нормализации запроса нет,
