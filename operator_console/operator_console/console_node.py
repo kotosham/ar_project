@@ -676,6 +676,16 @@ class ConsoleBackend:
             log_path = os.path.join(
                 os.path.dirname(os.path.expanduser(self.params['config_path'])) or '.',
                 'console_stack.log')
+        # Забыть граф ПЕРЕД запуском: пороги свежести в симуляции — 12 с, и без
+        # этого преflight ещё столько же зеленел бы на последних сообщениях
+        # умершего стека. Через кнопку сброса это наблюдалось прямо: «ГОТОВ К
+        # ИСПЫТАНИЮ» через 9 с после нажатия при чистом старте в ~31 с.
+        node = self._node
+        if node is not None:
+            try:
+                node.forget_graph_state()
+            except Exception as exc:                       # noqa: BLE001
+                node.get_logger().warn('forget_graph_state: %r' % (exc,))
         return self._runner.start(argv, env=self._store.as_launch_env(),
                                   log_path=log_path)
 
@@ -1293,6 +1303,35 @@ class ConsoleRosNode(Node):
                            '(%.0f с в /%s). Проверьте, что /frontiers стал '
                            'непустым — без фронтиров SEARCH не поедет.'
                            % (2 * half, topic.lstrip('/'))}
+
+    def forget_graph_state(self):
+        """Забыть всё, что известно о ГРАФЕ, — вызывается при запуске стека.
+
+        Иначе преflight зеленеет на данных мертвеца. Измерено на перезапуске
+        через кнопку сброса: «ГОТОВ К ИСПЫТАНИЮ» появился через 9 с после
+        нажатия, при том что чистый старт этого стека занимает ~31 с. Причина
+        арифметическая: порог свежести heartbeat и /robot_health в симуляции —
+        12 с (mode_profiles), поэтому последние сообщения умершего стека ещё
+        целых 12 с выглядят живыми. Оператор в это окно видит зелёный свет и
+        отправляет задание в граф, которого уже нет, а нового ещё нет.
+
+        Своё состояние консоли (её ROS-узел, конфиг) не трогаем: он к стеку
+        отношения не имеет и переживает перезапуск законно.
+        """
+        with self._lock:
+            self._components = {}
+            self._heartbeats = {}
+            self._health_rx = 0.0
+            self._topic_rx = {}
+            self._odom_pose = None
+            self._odom_rx = 0.0
+            self._mission = None
+            self._mission_running = False
+            self._mission_step = 0
+            self._mission_target = ''
+            self._activity_rx = 0.0
+            self._mission_cancel_rx = 0.0
+            self._lifecycle = {name: 'unknown' for name in NAV2_LIFECYCLE_NODES}
 
     def _twist(self, mode, yaw_rate):
         if mode == HARDWARE:
