@@ -243,6 +243,13 @@ def _edge_processes(context, mode, planner, args):
             # Комнаты мира: планировщик подписывает их на карте, которую видит
             # модель. Пусто -> подписей нет, карта остаётся чистой SLAM-сеткой.
             '-p', f"rooms_spec:={_arg(context, 'rooms_spec')}",
+            # Точка старта = начало кадра `map` у SLAM. Комнаты приходят в
+            # МИРОВЫХ координатах, и без этого сдвига их подписи ложились мимо
+            # плана здания ровно на вектор спавна (в house — на 7 метров).
+            '-p', f"rooms_origin_x:={_arg(context, 'spawn_x')}",
+            '-p', f"rooms_origin_y:={_arg(context, 'spawn_y')}",
+            '-p', f"rooms_origin_yaw:={_arg(context, 'spawn_yaw')}",
+            '-p', f"detect_memory_conf:={_arg(context, 'detect_memory_conf')}",
         ]
         vlm_model = _arg(context, 'vlm_model')
         if vlm_model:
@@ -364,6 +371,26 @@ def generate_launch_description():
             description='Комнаты мира: имя|x0,x1,y0,y1;имя|... — подписи на '
                         'для подписей на карте планировщика. АПРИОРНОЕ знание: '
                         'робот его не выводит, оно берётся из worlds.yaml.'),
+        DeclareLaunchArgument(
+            'spawn_x', default_value='0.0',
+            description='Точка старта робота по X. Здесь она нужна как начало '
+                        'кадра `map`, чтобы комнаты из rooms_spec (мировые '
+                        'координаты) легли на карту SLAM без сдвига.'),
+        DeclareLaunchArgument(
+            'spawn_y', default_value='0.0',
+            description='Точка старта робота по Y (см. spawn_x).'),
+        DeclareLaunchArgument(
+            'spawn_yaw', default_value='0.0',
+            description='Курс робота на старте (см. spawn_x).'),
+        DeclareLaunchArgument(
+            'detect_memory_conf', default_value='0.55',
+            description='Порог уверенности, с которого детекция ОТМЕЧАЕТСЯ на карте '
+                        'планировщика как найденный предмет. Высокий намеренно: '
+                        'отметка живёт до конца миссии, и модель ей верит, поэтому '
+                        'ложная дороже пропущенной. Осторожно с симуляцией: цели в '
+                        'house — плоские билборды, YOLOE даёт по ним 0.26..0.40, и '
+                        'при 0.55 они на карту не попадут вовсе. Понижайте этим '
+                        'аргументом, а не правкой кода.'),
         DeclareLaunchArgument(
             'vlm_timeout_s', default_value='30.0',
             description='Таймаут запроса к VLM, с.'),

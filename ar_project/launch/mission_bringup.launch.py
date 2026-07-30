@@ -319,6 +319,13 @@ def _bringup(context, *args, **kwargs):
                 'max_steps': _arg(context, 'max_steps'),
                 'replan_every_n': _arg(context, 'replan_every_n'),
                 'rooms_spec': _arg(context, 'rooms_spec'),
+                # Та же точка старта, что уходит в Gazebo: для планировщика это
+                # начало кадра `map`, по нему он сдвигает комнаты в координаты
+                # карты SLAM.
+                'spawn_x': _arg(context, 'spawn_x'),
+                'spawn_y': _arg(context, 'spawn_y'),
+                'spawn_yaw': _arg(context, 'spawn_yaw'),
+                'detect_memory_conf': _arg(context, 'detect_memory_conf'),
                 'vlm_timeout_s': _arg(context, 'vlm_timeout_s'),
                 # Агрегатор здоровья принадлежит НИЖНЕМУ слою: в sim его поднимает
                 # ветка выше, на железе — hardware_bringup.launch.py:194. Второй
@@ -447,6 +454,11 @@ def generate_launch_description():
             description='Потолок шагов миссии оркестратора.'),
         DeclareLaunchArgument(
             'rooms_spec', default_value=''),
+        DeclareLaunchArgument(
+            'detect_memory_conf', default_value='0.55',
+            description='Порог, с которого детекция отмечается на карте планировщика '
+                        'как найденный предмет. Подробности и предупреждение про '
+                        'плоские билборды в симуляции — в edge_layer.launch.py.'),
         DeclareLaunchArgument(
             'replan_every_n', default_value='1',
             description='Через сколько шагов оркестратор перезапрашивает план у VLM.'),
