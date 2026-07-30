@@ -29,7 +29,11 @@ collision_monitor:
     source_timeout: 1.0
     base_shift_correction: True
     stop_pub_timeout: 2.0
-    polygons: ["PolygonStop", "PolygonSlow"]
+    # Keep the hard stop in the default hardware safety chain. The slowdown
+    # polygon is useful for faster robots, but on this platform VLM/Nav2 already
+    # commands low speeds; scaling them to 30 % can drop below the drivetrain's
+    # effective motion threshold and make Nav2 fail "Failed to make progress".
+    polygons: ["PolygonStop"]
     # Hard stop: footprint grown by ~0.12 m front and sides, ~0.11 m rear.
     PolygonStop:
       type: "polygon"

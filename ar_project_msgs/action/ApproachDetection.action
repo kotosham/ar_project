@@ -5,6 +5,10 @@ uint32 mission_epoch
 string target_label          # what is confirmed on approach
 float32 approach_offset      # meters; default 0.58
 float32 max_pixel_age_s      # pixel freshness threshold; default 1.5
+# Continue toward a previously confirmed target point in map coordinates when
+# the object no longer fits in the camera frame after an intermediate approach.
+bool use_locked_target
+geometry_msgs/PointStamped locked_target_point
 ---
 # Result
 uint8 SUCCEEDED=0
@@ -15,6 +19,8 @@ uint8 LOST_TARGET=4
 
 uint8 outcome
 geometry_msgs/PoseStamped reached_pose
+geometry_msgs/PointStamped target_point
+geometry_msgs/PoseStamped final_goal_pose
 # True when the server intentionally drove only a short safe segment toward the
 # visual target because the final standoff pose was not known-free in the map.
 bool bounded_step

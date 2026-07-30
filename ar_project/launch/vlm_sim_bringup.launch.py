@@ -162,7 +162,7 @@ def generate_launch_description():
         DeclareLaunchArgument('detect_conf', default_value='0.0'),
         DeclareLaunchArgument('target_detect_conf', default_value='0.50'),
         DeclareLaunchArgument('detect_all_conf', default_value='0.08'),
-        DeclareLaunchArgument('context_detect_conf', default_value='0.35'),
+        DeclareLaunchArgument('context_detect_conf', default_value='0.30'),
         DeclareLaunchArgument('vlm_timeout_s', default_value='30.0'),
         DeclareLaunchArgument('send_map', default_value='true'),
         DeclareLaunchArgument('motion_fallback_frame', default_value='odom'),

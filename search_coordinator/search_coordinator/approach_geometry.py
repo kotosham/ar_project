@@ -61,6 +61,70 @@ def approach_goal(target_x, target_y, robot_x, robot_y, approach_offset):
     return (goal_x, goal_y, math.atan2(dy, dx))
 
 
+def bounded_drive_steps(max_step_m, min_step_m, resolution_m):
+    """Descending candidate drive distances for a bounded visual approach."""
+    max_step = max(0.0, float(max_step_m))
+    if max_step <= 0.0:
+        return []
+    min_step = max(0.0, min(float(min_step_m), max_step))
+    resolution = max(0.01, float(resolution_m))
+    steps = []
+    cur = max_step
+    while cur >= min_step - 1e-9:
+        steps.append(cur)
+        cur -= resolution
+    if not steps or abs(steps[-1] - min_step) > 1e-6:
+        steps.append(min_step)
+    return steps
+
+
+def bounded_unknown_status_allowed(status):
+    """Whether an unknown map classification may be used for a cautious probe.
+
+    Occupied and outside-map statuses are still hard rejects. The intent is only
+    to avoid blocking a visible target when online SLAM has not filled a short
+    corridor cell yet.
+    """
+    return str(status) in ('unknown', 'clearance_unknown')
+
+
+def select_safe_bounded_goal(target_x, target_y, robot_x, robot_y,
+                             max_step_m, min_step_m, resolution_m,
+                             status_fn, allow_unknown=False,
+                             unknown_max_step_m=0.6):
+    """Pick the longest safe bounded goal toward the target.
+
+    status_fn(x, y) must return the same status strings as
+    occupancy_clearance_status_at_world: 'known_free' means safe, anything else
+    is rejected but reported to the caller for logging.
+    """
+    dx = float(target_x) - float(robot_x)
+    dy = float(target_y) - float(robot_y)
+    target_range = math.hypot(dx, dy)
+    if target_range <= 1e-6:
+        return None, 'zero_range'
+    last_status = 'not_checked'
+    unknown_candidate = None
+    for drive_step in bounded_drive_steps(max_step_m, min_step_m, resolution_m):
+        scale = min(float(drive_step), target_range) / target_range
+        gx = float(robot_x) + dx * scale
+        gy = float(robot_y) + dy * scale
+        status = str(status_fn(gx, gy))
+        last_status = status
+        if status == 'known_free':
+            yaw = math.atan2(dy, dx)
+            return (gx, gy, yaw, float(drive_step), status), status
+        if (allow_unknown
+                and unknown_candidate is None
+                and float(drive_step) <= float(unknown_max_step_m) + 1e-9
+                and bounded_unknown_status_allowed(status)):
+            yaw = math.atan2(dy, dx)
+            unknown_candidate = (gx, gy, yaw, float(drive_step), status)
+    if unknown_candidate is not None:
+        return unknown_candidate, unknown_candidate[4]
+    return None, last_status
+
+
 def yaw_to_quaternion_zw(yaw):
     """(qz, qw) for a yaw-only rotation (qx = qy = 0)."""
     return (math.sin(yaw / 2.0), math.cos(yaw / 2.0))

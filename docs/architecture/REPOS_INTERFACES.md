@@ -130,10 +130,14 @@ uint32 mission_epoch
 string target_label          # что подтверждаем при подъезде
 float32 approach_offset      # метры; по умолчанию 0.58
 float32 max_pixel_age_s      # порог свежести пикселя; по умолчанию 1.5
+bool use_locked_target       # продолжить к ранее подтвержденной map-точке
+geometry_msgs/PointStamped locked_target_point
 ---
 # Result
 uint8 outcome                # SUCCEEDED/ABORTED/PREEMPTED/STALE_DETECTION/LOST_TARGET
 geometry_msgs/PoseStamped reached_pose
+geometry_msgs/PointStamped target_point
+geometry_msgs/PoseStamped final_goal_pose
 float32 final_distance_m
 ---
 # Feedback

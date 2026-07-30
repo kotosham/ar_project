@@ -9,6 +9,7 @@ from search_coordinator.approach_geometry import (
     DepthRingBuffer,
     approach_goal,
     backproject_pixel,
+    bounded_drive_steps,
     embedded_depth,
     goal_update_needed,
     occupancy_clearance_status_at_world,
@@ -16,6 +17,7 @@ from search_coordinator.approach_geometry import (
     occupancy_value_at_world,
     pixel_age_s,
     quaternion_to_yaw,
+    select_safe_bounded_goal,
     valid_depth,
     yaw_to_quaternion_zw,
 )
@@ -70,6 +72,72 @@ def test_approach_goal_inside_offset_holds_position_but_faces_target():
     gx, gy, yaw = approach_goal(0.3, 0.0, 0.0, 0.0, 0.58)
     assert gx == 0.0 and gy == 0.0
     assert math.isclose(yaw, 0.0, abs_tol=1e-9)
+
+
+def test_bounded_drive_steps_descend_to_minimum():
+    steps = bounded_drive_steps(1.2, 0.35, 0.2)
+    assert steps[0] == 1.2
+    assert steps[-1] == 0.35
+    assert all(a > b for a, b in zip(steps, steps[1:]))
+
+
+def test_select_safe_bounded_goal_shortens_until_known_free():
+    def status(x, _y):
+        return 'known_free' if x <= 0.8 else 'occupied_100'
+
+    selected, last_status = select_safe_bounded_goal(
+        target_x=5.0, target_y=0.0,
+        robot_x=0.0, robot_y=0.0,
+        max_step_m=1.2, min_step_m=0.35, resolution_m=0.2,
+        status_fn=status)
+    assert selected is not None
+    gx, gy, yaw, drive_step, safe_status = selected
+    assert math.isclose(gx, 0.8, abs_tol=1e-9)
+    assert math.isclose(gy, 0.0, abs_tol=1e-9)
+    assert math.isclose(yaw, 0.0, abs_tol=1e-9)
+    assert math.isclose(drive_step, 0.8, abs_tol=1e-9)
+    assert safe_status == 'known_free'
+    assert last_status == 'known_free'
+
+
+def test_select_safe_bounded_goal_reports_when_no_safe_step():
+    selected, last_status = select_safe_bounded_goal(
+        target_x=5.0, target_y=0.0,
+        robot_x=0.0, robot_y=0.0,
+        max_step_m=1.2, min_step_m=0.35, resolution_m=0.2,
+        status_fn=lambda _x, _y: 'unknown')
+    assert selected is None
+    assert last_status == 'unknown'
+
+
+def test_select_safe_bounded_goal_allows_short_unknown_probe_when_enabled():
+    selected, last_status = select_safe_bounded_goal(
+        target_x=5.0, target_y=0.0,
+        robot_x=0.0, robot_y=0.0,
+        max_step_m=1.2, min_step_m=0.35, resolution_m=0.2,
+        status_fn=lambda _x, _y: 'clearance_unknown',
+        allow_unknown=True,
+        unknown_max_step_m=0.6)
+    assert selected is not None
+    gx, gy, yaw, drive_step, status = selected
+    assert math.isclose(gx, 0.6, abs_tol=1e-9)
+    assert math.isclose(gy, 0.0, abs_tol=1e-9)
+    assert math.isclose(yaw, 0.0, abs_tol=1e-9)
+    assert math.isclose(drive_step, 0.6, abs_tol=1e-9)
+    assert status == 'clearance_unknown'
+    assert last_status == 'clearance_unknown'
+
+
+def test_select_safe_bounded_goal_still_rejects_occupied_when_unknown_allowed():
+    selected, last_status = select_safe_bounded_goal(
+        target_x=5.0, target_y=0.0,
+        robot_x=0.0, robot_y=0.0,
+        max_step_m=1.2, min_step_m=0.35, resolution_m=0.2,
+        status_fn=lambda _x, _y: 'clearance_occupied_100',
+        allow_unknown=True,
+        unknown_max_step_m=0.6)
+    assert selected is None
+    assert last_status == 'clearance_occupied_100'
 
 
 def test_occupancy_value_at_world_classifies_free_unknown_and_outside():

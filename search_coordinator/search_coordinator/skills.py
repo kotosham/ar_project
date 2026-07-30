@@ -371,9 +371,13 @@ class ExploreFrontierServer(SkillServer):
 
 
 class ApproachDetectionServer(SkillServer):
-    """Final approach to a detection (FMEA): SUCCEEDED only when Nav2 reached the
-    pose I set AND the last pixel was fresh. STALE_DETECTION / LOST_TARGET abort
-    rather than drive blindly or declare a false reach. No goal_locked latch."""
+    """Approach a detected target, or continue toward a locked target point.
+
+    Pixel mode is conservative: it needs a fresh /target_pixel before motion.
+    Locked-target mode is used after a previous confident detection already
+    produced a map point; it keeps driving toward that same point even if the
+    object overflows or drops out of the camera during the approach.
+    """
     action_type = ApproachDetection
     action_name = 'approach_detection'
 
@@ -399,6 +403,14 @@ class ApproachDetectionServer(SkillServer):
         node.declare_parameter('approach_direct_occupancy_threshold', 65)
         node.declare_parameter('approach_direct_clearance_m', 0.35)
         node.declare_parameter('approach_max_goal_step_m', 1.6)
+        node.declare_parameter('approach_min_goal_step_m', 0.35)
+        node.declare_parameter('approach_goal_step_search_resolution_m', 0.2)
+        node.declare_parameter('approach_require_safe_bounded_goal', True)
+        # For online SLAM, a short visual bounded step may land in still-unknown
+        # map cells. Let Nav2/local costmap be the final safety authority for
+        # that short probe, while occupied/outside-map remain hard rejects.
+        node.declare_parameter('approach_allow_unknown_bounded_goal', True)
+        node.declare_parameter('approach_unknown_bounded_max_step_m', 0.6)
         # A detector with a minimum range (e.g. a billboard/large object that
         # overflows the camera frame at close range) legitimately loses the target
         # in the final stretch of the approach. If we tracked the target until the
@@ -434,44 +446,80 @@ class ApproachDetectionServer(SkillServer):
         goal = goal_handle.request
         result = ApproachDetection.Result()
         max_age = goal.max_pixel_age_s if goal.max_pixel_age_s > 0 else 1.5
+        use_locked_target = bool(getattr(goal, 'use_locked_target', False))
 
-        # Pre-drive gate: classify LOST_TARGET / STALE_DETECTION before moving.
-        px = self._last_pixel
-        if px is None:
-            self.node.get_logger().warn('approach_detection: LOST_TARGET (no /target_pixel received)')
-            result.outcome = ApproachDetection.Result.LOST_TARGET
-            return 'abort', result
-        age = self._pixel_age(px)
-        if not is_fresh(age, max_age):
-            self.node.get_logger().warn(
-                'approach_detection: STALE_DETECTION (pixel age %.2fs > %.2fs)' % (age, max_age))
-            result.outcome = ApproachDetection.Result.STALE_DETECTION
-            return 'abort', result
+        if use_locked_target:
+            locked = getattr(goal, 'locked_target_point', None)
+            map_frame = self.node.get_parameter('approach_map_frame').value
+            if locked is None or locked.header.frame_id != map_frame:
+                self.node.get_logger().warn(
+                    'approach_detection: LOST_TARGET (locked target frame=%s, expected=%s)'
+                    % (getattr(getattr(locked, 'header', None), 'frame_id', ''),
+                       map_frame))
+                result.outcome = ApproachDetection.Result.LOST_TARGET
+                return 'abort', result
+            goal_data = self._compute_goal_from_map_target(
+                locked.point.x, locked.point.y, goal.approach_offset, map_frame)
+            px = None
+            age = 0.0
+        else:
+            # Pre-drive gate: classify LOST_TARGET / STALE_DETECTION before moving.
+            px = self._last_pixel
+            if px is None:
+                self.node.get_logger().warn(
+                    'approach_detection: LOST_TARGET (no /target_pixel received)')
+                result.outcome = ApproachDetection.Result.LOST_TARGET
+                return 'abort', result
+            age = self._pixel_age(px)
+            if not is_fresh(age, max_age):
+                self.node.get_logger().warn(
+                    'approach_detection: STALE_DETECTION (pixel age %.2fs > %.2fs)'
+                    % (age, max_age))
+                result.outcome = ApproachDetection.Result.STALE_DETECTION
+                return 'abort', result
 
-        goal_data = self._compute_goal(px, goal.approach_offset)
+            goal_data = self._compute_goal(px, goal.approach_offset)
         if goal_data is None:
             # cannot compute geometry (no intrinsics / TF) — treat as lost, never
             # drive blindly.
+            detail = ('locked_target' if use_locked_target
+                      else 'intr=%s depth=%.2f' % (self._intr is not None, px.point.z))
             self.node.get_logger().warn(
-                'approach_detection: LOST_TARGET (cannot compute goal; intr=%s depth=%.2f)'
-                % (self._intr is not None, px.point.z))
+                'approach_detection: LOST_TARGET (cannot compute goal; %s)' % detail)
             result.outcome = ApproachDetection.Result.LOST_TARGET
             return 'abort', result
         pose, goal_info = goal_data
         result.bounded_step = bool(goal_info.get('limited', False))
         result.final_distance_m = float(goal_info.get('expected_final_distance_m', 0.0))
+        result.target_point = goal_info.get('target_point', result.target_point)
+        result.final_goal_pose = goal_info.get('final_goal_pose', result.final_goal_pose)
+        if pose is None:
+            self.node.get_logger().warn(
+                'approach_detection: ABORTED (no safe bounded approach; '
+                'target_range=%.2fm final_goal=%s last_bounded=%s)'
+                % (goal_info.get('target_range_m', 0.0),
+                   goal_info.get('direct_goal_status', 'unknown'),
+                   goal_info.get('bounded_goal_status', 'unknown')))
+            result.outcome = ApproachDetection.Result.ABORTED
+            return 'abort', result
         if goal_info['limited']:
-            limit_note = ' bounded_step=%.2fm target_range=%.2fm reason=%s' % (
+            limit_note = ' bounded_step=%.2fm target_range=%.2fm reason=%s bounded_goal=%s' % (
                 goal_info['drive_step_m'], goal_info['target_range_m'],
-                goal_info.get('direct_goal_status', 'limited'))
+                goal_info.get('direct_goal_status', 'limited'),
+                goal_info.get('bounded_goal_status', 'unchecked'))
         elif goal_info.get('direct_goal_status') == 'known_free':
             limit_note = ' direct_goal=known_free target_range=%.2fm' % (
                 goal_info['target_range_m'])
         else:
             limit_note = ''
+        source_note = 'locked_target' if use_locked_target else 'pixel'
         self.node.get_logger().info(
-            'approach_detection: px=(%.0f,%.0f) depth=%.2f age=%.2fs -> goal=(%.2f,%.2f) driving%s'
-            % (px.point.x, px.point.y, px.point.z, age,
+            'approach_detection: %s target=(%.2f,%.2f) %s -> goal=(%.2f,%.2f) driving%s'
+            % (source_note,
+               result.target_point.point.x, result.target_point.point.y,
+               ('px=(%.0f,%.0f) depth=%.2f age=%.2fs'
+                % (px.point.x, px.point.y, px.point.z, age)
+                if px is not None else 'no live pixel required'),
                pose.pose.position.x, pose.pose.position.y, limit_note))
 
         # Closest remaining-distance-to-goal at which we still had a FRESH detection.
@@ -482,12 +530,13 @@ class ApproachDetectionServer(SkillServer):
         def tick(dist):
             cur = self._last_pixel
             cage = self._pixel_age(cur) if cur is not None else None
-            fresh = is_fresh(cage, max_age)
+            fresh = True if use_locked_target else is_fresh(cage, max_age)
             if fresh and not math.isnan(dist):
                 tracked['min_fresh_dist'] = min(tracked['min_fresh_dist'], float(dist))
             fb = ApproachDetection.Feedback()
             fb.distance_to_target = 0.0 if math.isnan(dist) else float(dist)
-            fb.detection_age_s = float(cage) if cage is not None else 1e3
+            fb.detection_age_s = 0.0 if use_locked_target else (
+                float(cage) if cage is not None else 1e3)
             fb.detection_fresh = fresh
             goal_handle.publish_feedback(fb)
 
@@ -495,6 +544,13 @@ class ApproachDetectionServer(SkillServer):
                                            self.ms, tick)
         self.node.get_logger().info('approach_detection: nav terminal=%s' % terminal)
         if terminal == 'reached':
+            if use_locked_target:
+                self.node.get_logger().info(
+                    'approach_detection: SUCCEEDED (reached locked target approach pose)')
+                result.outcome = ApproachDetection.Result.SUCCEEDED
+                result.final_distance_m = float(goal_info.get('expected_final_distance_m', 0.0))
+                result.reached_pose = reached
+                return 'succeed', result
             # FMEA: declare reached if the detection is STILL fresh, OR if we tracked
             # it until we were already near the goal (the detector's min-range blind
             # spot, not a moved/false target). Lost-while-far stays STALE/LOST.
@@ -547,10 +603,8 @@ class ApproachDetectionServer(SkillServer):
         cx, cy, cz = ag.backproject_pixel(px.point.x, px.point.y, depth, self._intr)
         map_frame = self.node.get_parameter('approach_map_frame').value
         cam_frame = px.header.frame_id or self.node.get_parameter('approach_camera_frame').value
-        robot_frame = self.node.get_parameter('approach_robot_frame').value
         try:
             tf_cam = self.tf_buffer.lookup_transform(map_frame, cam_frame, rclpy.time.Time())
-            tf_rob = self.tf_buffer.lookup_transform(map_frame, robot_frame, rclpy.time.Time())
         except (LookupException, ConnectivityException, ExtrapolationException):
             return None
         # Properly transform the camera-frame point into the map frame.
@@ -558,7 +612,15 @@ class ApproachDetectionServer(SkillServer):
         cam_pt.header.frame_id = cam_frame
         cam_pt.point.x, cam_pt.point.y, cam_pt.point.z = cx, cy, cz
         map_pt = do_transform_point(cam_pt, tf_cam)
-        tx, ty = map_pt.point.x, map_pt.point.y
+        return self._compute_goal_from_map_target(
+            map_pt.point.x, map_pt.point.y, offset, map_frame)
+
+    def _compute_goal_from_map_target(self, tx, ty, offset, map_frame):
+        robot_frame = self.node.get_parameter('approach_robot_frame').value
+        try:
+            tf_rob = self.tf_buffer.lookup_transform(map_frame, robot_frame, rclpy.time.Time())
+        except (LookupException, ConnectivityException, ExtrapolationException):
+            return None
         rx = tf_rob.transform.translation.x
         ry = tf_rob.transform.translation.y
         approach_offset = offset if offset > 0 else 0.58
@@ -568,19 +630,63 @@ class ApproachDetectionServer(SkillServer):
         yaw = math.atan2(dy, dx) if target_range > 1e-6 else 0.0
         full_gx, full_gy, full_yaw = ag.approach_goal(
             tx, ty, rx, ry, approach_offset)
+        target_point = PointStamped()
+        target_point.header.frame_id = map_frame
+        target_point.header.stamp = self.node.get_clock().now().to_msg()
+        target_point.point.x = float(tx)
+        target_point.point.y = float(ty)
+        target_point.point.z = 0.0
+        final_goal_pose = PoseStamped()
+        final_goal_pose.header.frame_id = map_frame
+        final_goal_pose.header.stamp = target_point.header.stamp
+        final_goal_pose.pose.position = Point(x=full_gx, y=full_gy, z=0.0)
+        fqz, fqw = ag.yaw_to_quaternion_zw(full_yaw)
+        final_goal_pose.pose.orientation.z = fqz
+        final_goal_pose.pose.orientation.w = fqw
         max_step = float(self.node.get_parameter('approach_max_goal_step_m').value)
+        min_step = float(self.node.get_parameter('approach_min_goal_step_m').value)
+        step_resolution = float(
+            self.node.get_parameter('approach_goal_step_search_resolution_m').value)
+        require_safe_bounded = bool(
+            self.node.get_parameter('approach_require_safe_bounded_goal').value)
         full_drive = math.hypot(full_gx - rx, full_gy - ry)
         wants_limit = max_step > 0.0 and full_drive > max_step
         direct_status = self._direct_goal_status(full_gx, full_gy, map_frame) if wants_limit else ''
         limited = wants_limit and direct_status != 'known_free'
+        bounded_status = ''
         if limited and target_range > 1e-6:
-            scale = max_step / target_range
-            gx = rx + dx * scale
-            gy = ry + dy * scale
-            drive_step = max_step
+            if require_safe_bounded:
+                allow_unknown_bounded = bool(self.node.get_parameter(
+                    'approach_allow_unknown_bounded_goal').value)
+                unknown_bounded_max_step = float(self.node.get_parameter(
+                    'approach_unknown_bounded_max_step_m').value)
+                selected, bounded_status = ag.select_safe_bounded_goal(
+                    tx, ty, rx, ry, max_step, min_step, step_resolution,
+                    lambda x, y: self._direct_goal_status(x, y, map_frame),
+                    allow_unknown=allow_unknown_bounded,
+                    unknown_max_step_m=unknown_bounded_max_step)
+                if selected is None:
+                    return None, {
+                        'limited': True,
+                        'target_range_m': target_range,
+                        'drive_step_m': 0.0,
+                        'expected_final_distance_m': target_range,
+                        'direct_goal_status': direct_status,
+                        'bounded_goal_status': bounded_status,
+                        'target_point': target_point,
+                        'final_goal_pose': final_goal_pose,
+                    }
+                gx, gy, yaw, drive_step, bounded_status = selected
+            else:
+                scale = max_step / target_range
+                gx = rx + dx * scale
+                gy = ry + dy * scale
+                drive_step = max_step
+                bounded_status = 'unchecked'
         else:
             gx, gy, yaw = full_gx, full_gy, full_yaw
             drive_step = math.hypot(gx - rx, gy - ry)
+            bounded_status = 'not_limited'
         expected_final_distance = math.hypot(tx - gx, ty - gy)
         pose = PoseStamped()
         pose.header.frame_id = map_frame
@@ -595,6 +701,9 @@ class ApproachDetectionServer(SkillServer):
             'drive_step_m': drive_step,
             'expected_final_distance_m': expected_final_distance,
             'direct_goal_status': direct_status,
+            'bounded_goal_status': bounded_status,
+            'target_point': target_point,
+            'final_goal_pose': final_goal_pose,
         }
 
     def _direct_goal_status(self, gx, gy, map_frame):

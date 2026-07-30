@@ -94,8 +94,10 @@ ros2 launch ar_project hardware_bringup.launch.py
 
 `collision_monitor` на железе по умолчанию выключен: при нестабильных timestamp
 `/scan` он блокирует весь контур движения сообщениями `Robot to stop due to
-invalid source`. Если `/scan` и TF проверены и нужны реактивные stop/slowdown
-полигоны, включайте явно:
+invalid source`. Если `/scan` и TF проверены и нужна реактивная защита,
+включайте явно. Текущий штатный safety-режим — stop-only: `PolygonSlow`
+отключён, потому что slowdown `30%` делает малые VLM/Nav2-команды слишком
+слабыми и Nav2 может падать в `Failed to make progress`.
 
 ```bash
 ros2 launch ar_project hardware_bringup.launch.py use_collision_monitor:=true
@@ -164,7 +166,9 @@ ros2 run search_coordinator coordinator_node --ros-args \
   -p use_sim_time:=false \
   -p approach_max_goal_step_m:=1.2 \
   -p approach_direct_clearance_m:=0.55 \
-  -p approach_direct_if_goal_in_known_free_map:=true
+  -p approach_direct_if_goal_in_known_free_map:=true \
+  -p approach_allow_unknown_bounded_goal:=true \
+  -p approach_unknown_bounded_max_step_m:=0.6
 ```
 
 #### Edge-ноутбук
@@ -242,7 +246,9 @@ set +a
 
 Для VLM hardware-режима рабочие значения уже зашиты дефолтами: edge-camera
 `/camera_edge/color/image_raw`, `async_replan=false`, `vlm_timeout_s=30.0`,
-`context_detect_conf=0.35`, `approach_max_goal_step_m=1.2`.
+`initial_scan_when_target_absent=true`, `context_detect_conf=0.30`,
+`semantic_turn_max_streak=1`, `turn_settle_s=2.0`,
+`approach_max_goal_step_m=1.2`, `locked_target_approach_max_attempts=8`.
 
 **Edge T4 — RViz**
 
@@ -382,10 +388,27 @@ Nav) · `DETECT_ALL`(детект всех объектов + классы, в n
 
 `visible_marks` — это кандидаты финальной цели, к ним можно применять `DRIVE_TO_VISIBLE`.
 `context_marks` — это объекты-подсказки для поиска: например `desk(left, office_context)`,
-когда ищем `office chair`. К ним нельзя напрямую вызвать `DRIVE_TO_VISIBLE`; VLM должна выбрать
-`TURN` или `DRIVE_FORWARD` в сторону полезного контекста. Если VLM все же ошибочно выберет
-`DRIVE_TO_VISIBLE mark_id` из `context_marks`, orchestrator не валит план в fallback, а
-автоматически превращает это в `semantic_explore`-маневр к этой области.
+когда ищем `office chair`. Это **не цели для подъезда**. Они нужны только как ориентиры,
+чтобы выбрать более перспективный свободный коридор/область карты: например “в правом
+коридоре много офисной мебели, исследую этот проход”. При отсутствии строгой цели приоритет —
+исследовать белые связные free-space коридоры на SLAM-карте, а не ехать носом к тумбе,
+столу или шкафу. Если VLM все же ошибочно выберет `DRIVE_TO_VISIBLE mark_id` из
+`context_marks`, orchestrator не валит план в fallback и не подъезжает к context-объекту:
+он превращает это в `semantic_explore` — поворот/переоценку сцены для выбора коридора.
+Если VLM уже выбрала `DRIVE_FORWARD` по свободному коридору, context-объекты больше не
+подменяют это действие поворотом к мебели; исключение — близкое препятствие по центру,
+когда прямой проезд небезопасен.
+
+При `initial_scan_when_target_absent=true` начальный обзор работает как сбор описаний
+коридоров: стартовый кадр записывается как `CORRIDOR_SCAN[forward]`, после правого
+поворота — `CORRIDOR_SCAN[right]`, после левого обзора — `CORRIDOR_SCAN[left]`.
+В каждую запись попадают найденные context-объекты этого направления. VLM получает эти
+записи как `corridor_scan` и должна выбирать коридор так: сначала наличие свободного
+белого/серого прохода на SLAM-карте, затем семантический вес объектов в этом проходе.
+Если несколько коридоров одинаково проходимы, предпочтение получает тот, где больше
+релевантных подсказок для цели. После выбора коридора нормальное действие —
+короткие `DRIVE_FORWARD` шаги по проходу до появления строгой цели, отказа Nav2 или
+близкого препятствия.
 
 Если финальная цель видна, но `distance_m=null` / глубина неизвестна (например объект дальше
 надежной зоны RealSense), VLM не должна завершать миссию и не должна вызывать
@@ -397,24 +420,35 @@ Nav) · `DETECT_ALL`(детект всех объектов + классы, в n
 по `/map`: если она уже лежит в известной свободной клетке SLAM-карты, Nav2 получает прямой
 маршрут к цели. Если карты еще нет, точка вне карты, unknown/occupied или вокруг
 standoff-точки нет свободного радиуса `approach_direct_clearance_m`, подход режется на
-короткий шаг `approach_max_goal_step_m`, после которого VLM снова получает свежий кадр
-и карту. Это защищает онлайн-SLAM от целей за пределами текущей известной области карты
-и от прямой парковки слишком близко к препятствию.
+короткий шаг `approach_max_goal_step_m`. После первого уверенного `DRIVE_TO_VISIBLE`
+orchestrator запоминает map-точку цели; если после bounded-step объект выпал из кадра,
+он не возвращается к generic context-search, а продолжает подход к сохраненной точке
+через `ApproachDetection` locked-target режим. Это защищает онлайн-SLAM от целей за
+пределами текущей известной области карты и от прямой парковки слишком близко к
+препятствию, но не забывает уже подтвержденный объект.
 
 #### Ключевые параметры orchestrator
 | Параметр | Деф. | Зачем |
 |---|---|---|
 | `async_replan` | `false` | `false` = дискретные шаги (едь→стоп→свежее наблюдение→думай). `true` включает overlap replan, но сложнее анализировать логи |
+| `turn_settle_s` | `2.0` | Пауза после успешного `TURN` перед следующей детекцией/VLM-наблюдением; нужна, чтобы кадр RealSense не был смазан в хвосте поворота. При `async_replan=true` TURN всё равно требует свежего post-settle кадра |
+| `min_effective_turn_rad` | `0.60` | Минимальный исполнимый `TURN`; маленькие повороты VLM нормализуются, потому что Nav2 может засчитать их внутри yaw tolerance без реального движения |
+| `initial_scan_when_target_absent` | `true` | Если строгая цель не видна в начальном кадре, выполнить обзорный sweep перед VLM-поиском: сначала вправо ~90°, затем влево ~180° из правого положения |
+| `initial_scan_left_rad` / `initial_scan_right_rad` | `3.14` / `1.57` | Углы начального обзора: правый кадр после `-1.57rad`, затем левый кадр после двух signed-поворотов `+1.57rad` + `+1.57rad`; так Nav2 не выбирает неоднозначное направление для 180° |
 | `detect_conf` | `0.0` | Legacy override: если >0, одним числом переопределяет оба порога ниже |
 | `target_detect_conf` | `0.50` | Порог конкретной цели для DINO+MobileSAM (`chair`, `drawer cabinet`) — как в базовой дипломной реализации |
 | `detect_all_conf` | `0.08` | Порог обычного `DETECT_ALL` для YOLOE broad-vocab |
-| `context_detect_conf` | `0.35` | Порог DINO office-context, когда цель не найдена, но нужно найти офисные объекты-подсказки |
+| `context_detect_conf` | `0.30` | Порог DINO office-context, когда цель не найдена, но нужно найти офисные объекты-подсказки |
 | `context_target_promote_conf` | `0.35` | Если context-DINO нашёл `target_like` объект (`office chair` при цели `chair`) не ниже этого порога, он повышается до настоящего target candidate |
 | `auto_context_when_target_absent` | `true` | Если цель не найдена, автоматически собрать `context_marks` для semantic-explore |
+| `semantic_turn_max_streak` | `1` | Сколько смысловых поворотов подряд разрешено до принудительного продвижения вперёд, если путь не блокирован; `1` не даёт роботу “зависать” на осмотре одного пятачка |
 | `finish_on_approach_success` | `true` | Завершить VLM-миссию после успешного финального `DRIVE_TO_VISIBLE`; дальний bounded-step не считается финишем |
+| `locked_target_approach_max_attempts` | `8` | После уверенной target-детекции продолжать ехать к сохраненной map-точке цели, даже если объект пропал из кадра после bounded-step; лимит защищает от бесконечной попытки |
 | `approach_max_goal_step_m` | `1.2` | Лимит шага для дальнего `ApproachDetection`, когда финальная точка вне известной свободной карты |
 | `approach_direct_if_goal_in_known_free_map` | `true` | Если финальная standoff-точка находится в known-free области `/map`, ехать к ней напрямую, без bounded-step |
 | `approach_direct_clearance_m` | `0.35` | Минимальный known-free радиус вокруг direct standoff-точки; если рядом unknown/occupied, используется bounded-step |
+| `approach_allow_unknown_bounded_goal` | `true` | Разрешить короткий bounded-step через `unknown`/`clearance_unknown`, когда цель видна, но онлайн-SLAM ещё не достроил карту; occupied/outside-map всё ещё запрещены |
+| `approach_unknown_bounded_max_step_m` | `0.6` | Максимальная длина такого осторожного unknown-probe; если цель уже locked, следующий шаг продолжит тот же target-lock, а не generic поиск |
 | `send_map` | `true` | `false` = не слать карту 2-м изображением (легче запрос; если эндпоинт таймаутит) |
 | `map_max_px` | `384` | Макс. сторона рендера карты |
 | `vlm_timeout_s` | `30.0` | На медленном эндпоинте/с картой можно поднять до `60`, иначе circuit-breaker → DEGRADED |
