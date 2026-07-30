@@ -290,7 +290,7 @@ sudo ip link set can0 up type can bitrate 1000000</pre></li>
     <button class="primary" onclick="sendMission()">Отправить задание</button>
     <button class="danger" onclick="stopMission()">Стоп</button>
     <button onclick="seedMap()">Засеять карту (вращение на месте)</button>
-    <button class="danger" id="btnReset" onclick="resetRobot()">Вернуть в исходную точку</button>
+    <button class="danger" id="btnReset" onclick="resetRobot()">Сброс: поднять мир заново</button>
   </div>
   <p class="hint">Для VLM-режима нужен ЧИСТЫЙ лейбл объекта, без глаголов («chair», а не «найди стул»). Для FLAT можно фразу — её нормализует PromptBridge. «Засеять карту» крутит робота на месте несколько секунд: в замкнутом помещении поиск не стартует, пока на карте нет ни одной границы известного и неизвестного.</p>
   <div class="bigerr" id="missionMsg"></div>
@@ -764,17 +764,19 @@ function missionMsg(text,good){
 async function resetRobot(){
  if(S.resetAsked!==(S.cfg.world||"")){
   S.resetAsked=(S.cfg.world||"");
-  missionMsg('Сброс вернёт робота в точку спавна мира «'+(S.cfg.world||"—")
-    +'», остановит миссию и СОТРЁТ построенную карту вместе с костмапами — '
-    +'иначе SLAM продолжит считать, что робот там, где был, и навигация '
-    +'упрётся в несуществующие стены. Нажмите кнопку ещё раз, чтобы '
-    +'подтвердить.',false);
+  missionMsg('Сброс ПЕРЕЗАПУСТИТ нижний слой мира «'+(S.cfg.world||"—")
+    +'»: миссия прервётся, Gazebo, SLAM и Nav2 поднимутся заново, робот окажется '
+    +'в точке спавна, карта начнётся с нуля. Так одометрия и кадр карты снова '
+    +'совпадут с миром — телепорт этого не давал: он двигал только модель, а '
+    +'/odom оставался на старом отсчёте. Ждать зелёного «ГОТОВ К ИСПЫТАНИЮ» '
+    +'около 45 с. Нажмите кнопку ещё раз, чтобы подтвердить.',false);
   return;
  }
  S.resetAsked=null;
  const btn=el("btnReset");
  btn.disabled=true;
- missionMsg("Сбрасываю: останавливаю миссию, переношу робота, забываю карту…",true);
+ missionMsg("Сбрасываю: останавливаю миссию и поднимаю мир заново — "
+   +"дождитесь зелёного преflight, около 45 с…",true);
  try{
   const r=await api("POST","/api/robot/reset");
   if(r.status===200){missionMsg(r.data.note_ru||"Сброс выполнен.",true)}

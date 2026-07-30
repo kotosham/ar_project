@@ -35,7 +35,6 @@ import json
 import math
 import os
 import shlex
-import subprocess
 import socket
 import sys
 import threading
@@ -61,7 +60,6 @@ try:
     from rosgraph_msgs.msg import Clock
     from sensor_msgs.msg import CameraInfo, JointState, LaserScan
     from std_msgs.msg import Empty, String
-    from std_srvs.srv import Empty as EmptySrv
 
     from ar_project_msgs.action import Stop
     from ar_project_msgs.msg import Heartbeat
@@ -122,18 +120,28 @@ SEED_DURATION_S = 5.0
 SEED_YAW_RATE = 0.6
 SEED_RATE_HZ = 10.0
 
-# Сброс робота в точку спавна (только симуляция).
-# Имя модели задаётся при спавне — launch_sim.launch.py:297 '-name', 'my_bot'.
-GZ_ROBOT_NAME = 'my_bot'
-# Тот же зазор над полом, что у раннера сценариев
-# (house_scenario_runner.py:146): колесо радиусом 0.038 м, роняем чуть выше
-# пола, иначе телепорт «вбивает» шасси в землю и физика выталкивает робота.
-GZ_SPAWN_Z = 0.05
-GZ_CALL_TIMEOUT_S = 8.0
-RESET_SERVICE_TIMEOUT_S = 5.0
-RTABMAP_RESET_SRV = '/rtabmap/reset'
-GLOBAL_COSTMAP_CLEAR_SRV = '/global_costmap/clear_entirely_global_costmap'
-LOCAL_COSTMAP_CLEAR_SRV = '/local_costmap/clear_entirely_local_costmap'
+# Сброс робота (только симуляция) = ПЕРЕЗАПУСК НИЖНЕГО СЛОЯ.
+#
+# Прежняя реализация телепортировала модель в Gazebo (`gz service set_pose`),
+# сбрасывала RTAB-Map и чистила костмапы. Она была неверна по построению, и вот
+# замер сразу после нажатия: Gazebo показывает робота в (-7.000, 0.000), а
+# /odom — в (-2.22, -2.93), то есть телепорт одометрию не двигает ВООБЩЕ. Её
+# ведёт плагин DiffDrive внутри Gazebo, интегрируя колёсные шарниры, и set_pose
+# его состояния не касается; сброс RTAB-Map чистит карту, но не переанкоряет
+# кадр `map` (map->odom остаётся единичным). В итоге кадр `map` остаётся
+# приклеен к началу одометрии, костмапы и вид сверху живут в сдвинутом кадре, а
+# Nav2 отвечает «no route» в пустом коридоре. Оператор при этом видел
+# «сброс выполнен» — консоль вычитала свой собственный ноль и показывала спавн.
+#
+# Перезапуск слоя честен по построению: процессы поднимаются заново, одометрия
+# начинается с нуля, кадр `map` снова совпадает с точкой спавна (проверено:
+# Gazebo (-7.000, 0.000) против /odom (0.00, 0.00)). Цена — ожидание зелёного
+# преflight, замерено ~45 с на чистом старте.
+RESET_STOP_GRACE_S = 20.0
+# Пауза между остановкой и новым запуском. Не косметика: SIGINT гасит дерево
+# узлов, но освобождение сегментов Fast DDS в /dev/shm занимает ещё мгновение, и
+# запуск впритык может не подняться вообще (наблюдалось на пакетных прогонах).
+RESET_RESTART_GAP_S = 3.0
 
 _HB_STATUS = {0: 'OK', 1: 'DEGRADED', 2: 'DOWN'}
 
@@ -668,15 +676,6 @@ class ConsoleBackend:
             log_path = os.path.join(
                 os.path.dirname(os.path.expanduser(self.params['config_path'])) or '.',
                 'console_stack.log')
-        # Новый Gazebo — новая одометрия, считающая с нуля. Сдвиг, оставшийся от
-        # сброса в прошлом прогоне, применился бы к чужому отсчёту и увёл бы
-        # отметку робота на плане.
-        node = self._node
-        if node is not None:
-            try:
-                node.forget_odom_zero()
-            except Exception:                          # noqa: BLE001
-                pass
         return self._runner.start(argv, env=self._store.as_launch_env(),
                                   log_path=log_path)
 
@@ -739,83 +738,75 @@ class ConsoleBackend:
             self._seed_lock.release()
 
     def robot_reset(self):
-        """Вернуть робота в точку спавна мира и забыть накопленную карту.
+        """Сброс = перезапуск нижнего слоя (см. RESET_STOP_GRACE_S).
 
-        Только симуляция: на железе робота в исходную точку возвращают руками, и
-        кнопка, которая делает вид, что умеет это, врала бы оператору.
+        Робот возвращается в точку спавна потому, что мир поднимается заново, а
+        не потому, что его туда перенесли. Разница принципиальна: при перезапуске
+        одометрия, кадр `map`, костмапы и SLAM начинаются с нуля СОГЛАСОВАННО, а
+        телепорт двигал только модель в Gazebo и оставлял всё восприятие в
+        сдвинутом кадре.
+
+        Только симуляция: на железе консоль стеком не владеет (stack_start там
+        отказывает по той же причине), робота в исходную точку возвращают руками,
+        и кнопка, делающая вид, что умеет это, врала бы оператору.
         """
         cfg = self._store.get()
         mode = cfg.get('mode', SIM)
         if mode != SIM:
             raise ValueError(
-                'Сброс в точку спавна существует только в симуляции: реального '
-                'робота в исходную точку возвращают руками.')
+                'Сброс существует только в симуляции: реального робота в '
+                'исходную точку возвращают руками, а стек на его хостах консоль '
+                'не перезапускает.')
         if not self._runner.is_running():
             raise ValueError('Стек не запущен — сбрасывать нечего.')
-        node = self._require_node()
         world_id = str(cfg.get('world') or '')
+        spawn = {}
         try:
-            entry = self._world_entry(world_id)
+            spawn = dict(self._world_entry(world_id).default_spawn or {})
         except KeyError as exc:
             raise ValueError('Мир %r не найден в каталоге: %s' % (world_id, exc))
-        # Тот же замок, что у засева: обе операции крутят колёса и мешали бы
-        # друг другу.
+        # Тот же замок, что у засева: иначе вращение засева поедет параллельно
+        # остановке стека и оператор получит два отчёта об одном роботе.
         if not self._seed_lock.acquire(False):
             raise ValueError('Идёт засев карты — дождитесь окончания вращения.')
         try:
-            # Миссия сначала: сбрасывать позицию под работающим планировщиком
-            # значит телепортировать робота из-под едущей навигации.
-            try:
-                node.mission_stop(cfg.get('planner', 'vlm'))
-            except Exception as exc:                   # noqa: BLE001
-                node.get_logger().warn('reset: остановка миссии — %r' % (exc,))
-            return node.reset_robot(world_id, dict(entry.default_spawn or {}))
+            steps = []
+            # Отмена миссии ПЕРЕД остановкой. Процессы всё равно погибнут, но
+            # консоль обязана узнать, что миссии больше нет: иначе её
+            # собственное состояние («миссия идёт») переживёт перезапуск и
+            # следующее задание будет отклонено как повторное.
+            node = self._node
+            if node is not None:
+                try:
+                    node.mission_stop(cfg.get('planner', 'vlm'))
+                    steps.append('миссия отменена')
+                except Exception as exc:               # noqa: BLE001
+                    node.get_logger().warn('reset: остановка миссии — %r' % (exc,))
+            self._runner.stop(grace_s=RESET_STOP_GRACE_S)
+            # Проверяем, а не верим: StackRunner ОТКАЗЫВАЕТ во втором запуске,
+            # пока жив первый, и без этой проверки оператор получил бы вместо
+            # понятного отказа RuntimeError про повторный старт. Два `ros2
+            # launch` в одном графе — это два coordinator_node, и такой запуск
+            # уже наблюдался как «внешне здоровый стек, path_length 0.00».
+            if self._runner.is_running():
+                raise ValueError(
+                    'Нижний слой не остановился за %.0f с — сброс отменён, '
+                    'иначе в графе оказались бы два стека. Остановите стек '
+                    'кнопкой на шаге 5 и запустите заново.' % RESET_STOP_GRACE_S)
+            steps.append('нижний слой остановлен')
+            time.sleep(RESET_RESTART_GAP_S)
+            self.stack_start()
+            steps.append('стек запускается заново')
+            return {
+                'ok': True, 'world': world_id, 'spawn': spawn, 'steps': steps,
+                'note_ru': 'Сброс: ' + '; '.join(steps) + '. Робот вернётся в '
+                           'точку спавна вместе с новым миром; одометрия и карта '
+                           'начнутся с нуля. Дождитесь зелёного «ГОТОВ К '
+                           'ИСПЫТАНИЮ» на шаге 5 — на этой машине это занимало '
+                           'около 45 с. Карта строится заново, поэтому «Засеять '
+                           'карту» может понадобиться снова.'}
         finally:
             self._seed_lock.release()
-
-
-def _odom_minus_zero(pose, zero):
-    """Одометрия относительно точки, объявленной нулевой.
-
-    Поворот учитывается: если сброс застал робота развёрнутым, дальнейшее
-    движение «вперёд» идёт в его собственных осях, а не в осях старого отсчёта,
-    и без поворота вектора план мира повёл бы отметку боком.
-    """
-    if not pose:
-        return None
-    if not zero:
-        return dict(pose)
-    dx = pose['x'] - zero['x']
-    dy = pose['y'] - zero['y']
-    c, s = math.cos(-zero['yaw']), math.sin(-zero['yaw'])
-    return {'x': c * dx - s * dy, 'y': s * dx + c * dy,
-            'yaw': pose['yaw'] - zero['yaw'], 'topic': pose.get('topic', '')}
-
-
-def _gz_set_pose(world_id, req):
-    """Телепорт модели через CLI Gazebo. (ok, подробность).
-
-    Через CLI, а не через ros_gz_bridge: моста на /world/*/set_pose в стеке нет,
-    а поднимать его только ради кнопки сброса — лишний узел в графе на каждый
-    запуск. gz лежит в PATH контейнера (gz_tools_vendor).
-    """
-    cmd = ['gz', 'service', '-s', '/world/%s/set_pose' % world_id,
-           '--reqtype', 'gz.msgs.Pose', '--reptype', 'gz.msgs.Boolean',
-           '--timeout', str(int(GZ_CALL_TIMEOUT_S * 1000)), '--req', req]
-    try:
-        proc = subprocess.run(cmd, capture_output=True, text=True,
-                              timeout=GZ_CALL_TIMEOUT_S + 2.0)
-    except FileNotFoundError:
-        return False, 'команда gz не найдена — это не симуляция?'
-    except subprocess.TimeoutExpired:
-        return False, 'gz не ответил за %.0f с' % GZ_CALL_TIMEOUT_S
-    out = (proc.stdout or '').strip()
-    # Ответ Boolean: «data: true». Пустой ответ означает, что сервиса нет —
-    # чаще всего потому, что имя мира другое.
-    if 'true' in out.lower():
-        return True, out
-    return False, (out or (proc.stderr or '').strip()
-                   or 'пустой ответ: мира %r в Gazebo нет?' % world_id)
 
 
 def _empty_ros_snapshot():
@@ -859,15 +850,13 @@ class ConsoleRosNode(Node):
         self._activity_rx = 0.0
         self._mission_cancel_rx = 0.0   # когда оркестратор подтвердил отмену
         self._seek_handle = None
-        self._odom_pose = None          # {'x','y','yaw','topic'} для плана мира
-        self._odom_raw = None           # то же, но БЕЗ вычета нуля
-        # Точка отсчёта одометрии. Ставится при сбросе робота в спавн: телепорт
-        # средствами Gazebo не трогает одометрию, которую считает плагин
-        # DiffDrive и отдаёт мост, — она продолжает вести счёт от старой
-        # позиции. Робот физически в спавне, а /odom утверждает обратное, и
-        # план мира рисует его не там. Запоминаем показание в момент сброса и
-        # дальше вычитаем: для оператора отсчёт снова идёт от точки спавна.
-        self._odom_zero = None
+        # {'x','y','yaw','topic'} для плана мира — ровно то, что пришло в /odom.
+        # Никакого вычитаемого «нуля» здесь больше нет: он существовал для
+        # телепорта, а тот показывал оператору спавн, с которым /odom был не
+        # согласен, — то есть скрывал расхождение вместо того, чтобы его
+        # устранить. Сброс теперь перезапускает слой, и одометрия начинается с
+        # нуля сама.
+        self._odom_pose = None
         self._odom_rx = 0.0
         self._lifecycle = {name: 'unknown' for name in NAV2_LIFECYCLE_NODES}
         # {имя: (future, монотонный дедлайн)} — не set: без дедлайна зависший
@@ -964,9 +953,8 @@ class ConsoleRosNode(Node):
             yaw = math.atan2(2.0 * (q.w * q.z + q.x * q.y),
                              1.0 - 2.0 * (q.y * q.y + q.z * q.z))
             with self._lock:
-                self._odom_raw = {'x': float(p.x), 'y': float(p.y),
-                                  'yaw': float(yaw), 'topic': topic}
-                self._odom_pose = _odom_minus_zero(self._odom_raw, self._odom_zero)
+                self._odom_pose = {'x': float(p.x), 'y': float(p.y),
+                                   'yaw': float(yaw), 'topic': topic}
                 self._odom_rx = time.monotonic()
             self._topic_rx[topic] = time.monotonic()
         return _cb
@@ -1305,104 +1293,6 @@ class ConsoleRosNode(Node):
                            '(%.0f с в /%s). Проверьте, что /frontiers стал '
                            'непустым — без фронтиров SEARCH не поедет.'
                            % (2 * half, topic.lstrip('/'))}
-
-    def reset_robot(self, world_id, spawn):
-        """Вернуть робота в точку спавна и привести восприятие в согласие с этим.
-
-        Одного set_pose мало, и это не мелочь: телепорт ПОСЛЕ старта SLAM рвёт
-        коррекцию map->odom (house_scenario_runner.py:905-910 предупреждает ровно
-        об этом). Робот оказывается в спавне, а карта продолжает утверждать, что
-        он там, где был, — костмапы держат «стены» вокруг старого места, и
-        навигация отказывается ехать. Поэтому за телепортом ОБЯЗАТЕЛЬНО идёт
-        сброс SLAM и очистка обоих костмапов.
-
-        Порядок важен: сначала остановить колёса (иначе робот уедет из спавна,
-        пока сбрасывается карта), потом телепорт, потом забыть карту.
-        """
-        steps = []
-        # 1. Колёса в ноль. Публикуем несколько раз: одиночное сообщение может
-        #    разойтись с тактом контроллера.
-        pub = self._cmd_pub.get(SIM) or next(iter(self._cmd_pub.values()))
-        for _ in range(5):
-            pub.publish(self._twist(SIM, 0.0))
-            time.sleep(0.05)
-        steps.append('колёса остановлены')
-
-        # 2. Телепорт средствами Gazebo. Имя мира в SDF совпадает с id каталога
-        #    (worlds/<id>.world -> <world name="<id>">), имя модели робота задано
-        #    при спавне в launch_sim.launch.py:297.
-        x = float((spawn or {}).get('x', 0.0))
-        y = float((spawn or {}).get('y', 0.0))
-        yaw = float((spawn or {}).get('yaw', 0.0))
-        qz, qw = math.sin(yaw / 2.0), math.cos(yaw / 2.0)
-        req = ('name: "%s", position: {x: %.4f, y: %.4f, z: %.4f}, '
-               'orientation: {x: 0, y: 0, z: %.6f, w: %.6f}'
-               % (GZ_ROBOT_NAME, x, y, GZ_SPAWN_Z, qz, qw))
-        ok, detail = _gz_set_pose(world_id, req)
-        if not ok:
-            raise ValueError('Gazebo не принял set_pose: %s' % detail)
-        steps.append('робот перемещён в (%.2f, %.2f, курс %.2f)' % (x, y, yaw))
-        time.sleep(0.6)                       # дать физике осесть до сброса карты
-
-        # 2а. Объявить текущее показание одометрии нулём. Телепорт её не трогает
-        #     (её ведёт плагин DiffDrive внутри Gazebo), и без этого план мира
-        #     продолжал бы рисовать робота там, откуда его унесли.
-        with self._lock:
-            self._odom_zero = dict(self._odom_raw) if self._odom_raw else None
-            if self._odom_raw:
-                self._odom_pose = _odom_minus_zero(self._odom_raw, self._odom_zero)
-        steps.append('отсчёт одометрии сдвинут в точку спавна'
-                     if self._odom_zero else 'одометрия ещё не приходила')
-
-        # 3. Забыть карту и костмапы. Каждый сервис необязателен по отдельности
-        #    (в мире без SLAM его может не быть), поэтому промах логируем, но не
-        #    считаем отказом всей операции.
-        for service, label in ((RTABMAP_RESET_SRV, 'SLAM сброшен'),
-                               (GLOBAL_COSTMAP_CLEAR_SRV, 'глобальный костмап очищен'),
-                               (LOCAL_COSTMAP_CLEAR_SRV, 'локальный костмап очищен')):
-            if self._call_empty_service(service):
-                steps.append(label)
-            else:
-                steps.append('%s: сервис %s не ответил' % (label, service))
-        return {'ok': True, 'world': world_id,
-                'spawn': {'x': x, 'y': y, 'yaw': yaw},
-                'steps': steps,
-                'note_ru': 'Сброс выполнен: ' + '; '.join(steps) + '. Карта '
-                           'строится заново, поэтому «Засеять карту» может '
-                           'понадобиться снова.'}
-
-    def forget_odom_zero(self):
-        """Забыть точку отсчёта одометрии (перед запуском нового стека)."""
-        with self._lock:
-            self._odom_zero = None
-            self._odom_pose = dict(self._odom_raw) if self._odom_raw else None
-
-    def _call_empty_service(self, name):
-        """Вызов сервиса без аргументов. True — ответил, False — нет такого или
-        не успел. Тип берётся по имени: у костмапов Nav2 он свой."""
-        try:
-            if 'costmap' in name:
-                from nav2_msgs.srv import ClearEntireCostmap as SrvType
-                request = SrvType.Request()
-            else:
-                SrvType, request = EmptySrv, EmptySrv.Request()
-            client = self.create_client(SrvType, name)
-            try:
-                if not client.wait_for_service(timeout_sec=RESET_SERVICE_TIMEOUT_S):
-                    return False
-                future = client.call_async(request)
-                deadline = time.monotonic() + RESET_SERVICE_TIMEOUT_S
-                while not future.done() and time.monotonic() < deadline:
-                    time.sleep(0.05)
-                if not future.done():
-                    future.cancel()
-                    return False
-                return True
-            finally:
-                self.destroy_client(client)
-        except Exception as exc:                       # noqa: BLE001
-            self.get_logger().warn('reset: сервис %s — %r' % (name, exc))
-            return False
 
     def _twist(self, mode, yaw_rate):
         if mode == HARDWARE:
