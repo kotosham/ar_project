@@ -122,7 +122,19 @@ PROFILES = {
         'camera_depth_topic': '/camera/camera/aligned_depth_to_color/image_raw',
         'camera_info_topic': '/camera/camera/color/camera_info',
         'detector_use_compressed_input': False,
-        'detector_model_mode': 'yoloe',
+        # ЦЕЛЬ ищет GroundingDINO, DETECT_ALL остаётся на YOLOE (режим hybrid).
+        # Причина — замер на 11 кадрах мира house, где предмет заведомо в кадре
+        # и спрошен своим же именем при пороге 0.05: YOLOE не вернул НИ ОДНОЙ
+        # находки, GroundingDINO нашёл все. Мебель здесь — некрашеные примитивы
+        # (унитаз это белый параллелепипед), и открытый словарь YOLOE на них
+        # молчит; те 0.13..0.48, что видел оператор, были галлюцинациями на
+        # дверных проёмах вроде «clock 0.25» в пустом коридоре.
+        'detector_model_mode': 'hybrid',
+        # Пусто = дефолт бэкенда (grounding-dino-tiny). Именно он, а не
+        # mm_grounding_dino_tiny: на LVIS второй сильно выше (41.4 против 27.4),
+        # но на ЭТИХ кадрах находит 6 из 11 против 10 из 11 и систематически
+        # занижает оценки, из-за чего хуже отделяется от ложных срабатываний.
+        'detector_dino_model_id': '',
         # gz_bridge.yaml:73 отдаёт Twist на /diff_cont/cmd_vel_unstamped;
         # на железе ros2_control ждёт TwistStamped на /diff_cont/cmd_vel.
         'cmd_vel_final_topic': '/diff_cont/cmd_vel_unstamped',
@@ -163,7 +175,15 @@ PROFILES = {
         'camera_depth_topic': '/camera_edge/aligned_depth_to_color/image_raw',
         'camera_info_topic': '/camera_edge/color/camera_info',
         'detector_use_compressed_input': False,
+        # На ЖЕЛЕЗЕ остаётся YOLOE. Замер, из-за которого симуляция переехала на
+        # GroundingDINO, снят на примитивах Gazebo и о настоящей комнате не
+        # говорит ничего: там текстуры, тени и реальная геометрия — ровно то, на
+        # чём YOLOE и обучен. Менять железный профиль без замера НА ЖЕЛЕЗЕ значит
+        # повторить ту же ошибку, что с метрикой LVIS, только в другую сторону.
+        # Плюс цена: GroundingDINO это ~660 МБ весов и ~1.8 ГБ пик против ~33 МБ
+        # и 663 МБ у YOLOE, а edge-бокс робота заметно скромнее стенда.
         'detector_model_mode': 'yoloe',
+        'detector_dino_model_id': '',
         'cmd_vel_final_topic': '/diff_cont/cmd_vel',
         'starts_health_aggregator': False,
         'starts_slam_in_robot_layer': False,
@@ -251,6 +271,7 @@ def as_launch_args(mode, planner, world_file='', hw_parity=False):
         'orchestrator_camera_image_topic': profile['camera_rgb_topic'],
         'detector_use_compressed_input': _b(profile['detector_use_compressed_input']),
         'detector_model_mode': profile['detector_model_mode'],
+        'detector_dino_model_id': profile['detector_dino_model_id'],
         'use_mock': _b(planner == PLANNER_MOCK),
         'start_detector': _b(need['needs_detector']),
         'start_orchestrator': _b(need['needs_orchestrator']),

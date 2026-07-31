@@ -211,6 +211,9 @@ def _edge_processes(context, mode, planner, args):
                     # включённый compressed открыл бы вторую подписку к Pi.
                     '-p', f"use_compressed_input:={args['detector_use_compressed_input']}",
                     '-p', f"model_mode:={args['detector_model_mode']}",
+                    # Чекпоинт GroundingDINO из профиля режима. Пусто = дефолт
+                    # бэкенда; см. комментарий у detector_dino_model_id там.
+                    '-p', f"dino_model_id:={args['detector_dino_model_id']}",
                     '-p', 'depth_point_strategy:=nearest_mask',
                     '-p', f"target_conf_default:={_arg(context, 'target_detect_conf')}",
                     '-p', f"vocab_conf_default:={_arg(context, 'detect_all_conf')}",
