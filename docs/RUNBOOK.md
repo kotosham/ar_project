@@ -8,7 +8,7 @@
 - **Pi (робот):** executive (исполнительный слой) `search_coordinator` (SeekObject FSM + 5 skill-серверов +
   `frontier_extractor`) · аппаратный интерфейс ros2_control (`embodied_robot_system`, CAN/EPOS4) ·
   RealSense · локальный `/scan` (depthimage_to_laserscan) · облегчённый Nav2 · `map_odom_relay`.
-- **Edge (GPU-машина):** RTAB-Map RGB-D SLAM · `detect_target_server` (DINO+MobileSAM + YOLOE, в venv) ·
+- **Edge (GPU-машина):** RTAB-Map RGB-D SLAM · `detect_target_server` (DINO+MobileSAM, в venv) ·
   `planner_orchestrator` (VLM). Сама VLM-модель — это внешний OpenAI-совместимый API.
 - **Два режима:** FLAT (без VLM, executive автономен) и VLM (orchestrator управляет
   skill-ами executive, при потере связи деградирует обратно к FLAT).
@@ -24,8 +24,8 @@
   pip install torch torchvision --index-url https://download.pytorch.org/whl/cu124
   pip install -r ~/ros2_ws/src/object_tracking/requirements.txt
   ```
-  Веса YOLOE лежат в `object_tracking/object_tracking/model_weights/`
-  (`yoloe-11s-seg.pt` + `mobileclip_blt.ts`).
+  DINO веса берутся из локального Hugging Face cache; YOLOE веса остаются в репозитории только
+  для старых/сравнительных запусков `model_mode:=yoloe`.
 - Учётные данные VLM (только для режима VLM): скопируйте `object_tracking/planner_orchestrator/vlm.env.example`
   → `vlm.env`, заполните `VLM_BASE_URL` / `VLM_API_KEY` / `VLM_MODEL`. Загрузите перед запуском
   orchestrator: `set -a; source vlm.env; set +a`.
@@ -70,7 +70,7 @@ cd ~/ros2_ws
 source /opt/ros/jazzy/setup.bash
 source ~/ros2_ws/install/setup.bash
 
-ros2 topic pub --once /vlm_mission std_msgs/msg/String "{data: 'bus'}"
+ros2 run fleet_comms send_mission "bus" true
 ```
 
 Dashboard: `http://localhost:8088`.
@@ -195,6 +195,9 @@ RGB-D sync-окном: `approx_sync_max_interval:=0.5`, `topic_queue_size:=120`,
 
 **Edge T2 — detector / Set-of-Mark**
 
+Общий терминал для **FLAT** и **VLM**: executive в FLAT тоже использует
+`detect_target_server` на этапе DETECT/APPROACH.
+
 ```bash
 cd ~/ros2_ws
 source /opt/ros/jazzy/setup.bash
@@ -205,20 +208,17 @@ source ~/ros2_ws/src/ar_project/deploy/transport/transport_env.sh
 
 /home/user/.venvs/ros-jazzy-ml/bin/python -m object_tracking.detect_target_server \
   --ros-args \
-  -p use_sim_time:=false \
-  -p model_mode:=hybrid_dino_yoloe \
   -p image_topic:=/camera_edge/color/image_raw \
   -p depth_topic:=/camera_edge/aligned_depth_to_color/image_raw \
-  -p use_compressed_input:=false \
-  -p depth_point_strategy:=nearest_mask \
-  -p target_conf_default:=0.60 \
-  -p vocab_conf_default:=0.08
+  -p target_conf_default:=0.60
 ```
 
-В `hybrid_dino_yoloe` конкретная цель (`chair`, `office chair`, `bus`) детектируется через
-GroundingDINO+MobileSAM, а `DETECT_ALL` остается на YOLOE broad-vocab, чтобы обзор сцены не
-становился слишком тяжелым.
-`depth_point_strategy:=nearest_mask` означает, что пиксель для `DRIVE_TO_VISIBLE` выбирается
+По дефолту детектор запускается в `model_mode:=dino`: конкретная цель
+(`chair`, `office chair`, `bus`) детектируется через
+GroundingDINO+MobileSAM. Когда нужна обзорная семантика сцены, orchestrator отправляет
+в тот же DINO не пустой `DETECT_ALL`, а фиксированный context-запрос по офисному словарю.
+YOLOE в этом hardware/VLM режиме не используется.
+Дефолтный `depth_point_strategy:=nearest_mask` означает, что пиксель для `DRIVE_TO_VISIBLE` выбирается
 по ближайшей валидной глубине внутри маски объекта, а не по геометрическому центру маски.
 Когда конкретная цель не найдена, orchestrator автоматически делает context-обзор сцены и
 передает VLM `context_marks`: нецелевые объекты с `side=left/center/right`, расстоянием и
@@ -275,12 +275,7 @@ unset ROS_LOCALHOST_ONLY ROS_STATIC_PEERS ROS_AUTOMATIC_DISCOVERY_RANGE ROS_DISC
 export ROS_DISABLE_ROS2CLI_DAEMON=1
 source ~/ros2_ws/src/ar_project/deploy/transport/transport_env.sh
 
-# Прямое имя объекта:
-ros2 topic pub --once /vlm_mission std_msgs/msg/String "{data: 'chair'}"
-
-# Scene 5 / запрос-загадка: resolver должен нормализовать это в `office chair`.
-ros2 topic pub --once /vlm_mission std_msgs/msg/String \
-  "{data: 'the thing people sit on while working at a desk'}"
+ros2 run fleet_comms send_mission "chair" true
 ```
 
 Dashboard: `http://localhost:8088` на edge-ноутбуке.
@@ -326,8 +321,7 @@ kill %1; ros2 topic pub -r 10 /diff_cont/cmd_vel_unstamped geometry_msgs/msg/Twi
 ros2 topic echo /frontiers --once          # expect a non-empty list
 
 # T2: start the FLAT mission (allow_vlm:=false)
-ros2 action send_goal /seek_object object_tracking_msgs/action/SeekObject \
-  "{instruction: 'find bus', request_id: 'm1', mission_epoch: 0, allow_vlm: false}" --feedback
+ros2 run fleet_comms send_mission "bus" false
 ```
 FSM проходит SEARCH (едет к frontier-ам) → при свежем `/target_pixel` → DETECT → APPROACH.
 
@@ -357,9 +351,10 @@ ros2 launch ar_project vlm_sim_bringup.launch.py start_edge:=true
 ros2 launch ar_project vlm_sim_bringup.launch.py
 ```
 
-После запуска миссии командует именно VLM-orchestrator, а не FLAT `/seek_object`:
+После запуска миссии командует именно VLM-orchestrator, а `/seek_object`
+используется как единая точка входа и bridge в `/vlm_mission`:
 ```bash
-ros2 topic pub --once /vlm_mission std_msgs/msg/String "{data: bus}"
+ros2 run fleet_comms send_mission "bus" true
 ```
 
 Ручной вариант edge-части:
@@ -368,7 +363,7 @@ ros2 topic pub --once /vlm_mission std_msgs/msg/String "{data: bus}"
 set -a; source object_tracking/planner_orchestrator/vlm.env; set +a   # loads VLM_* (never printed)
 /home/user/.venvs/ros-jazzy-ml/bin/python -m planner_orchestrator.orchestrator_node
 # expect: "planner_orchestrator up ... client=OpenAICompatibleClient creds=env"
-ros2 topic pub --once /vlm_mission std_msgs/msg/String "{data: bus}"   # ЧИСТЫЙ лейбл (см. ниже)
+ros2 run fleet_comms send_mission "bus" true
 ```
 Orchestrator забирает реальные Set-of-Mark-кандидаты из `detect_target_server`, шлёт VLM наблюдение
 (см. ниже) и диспетчеризует выбранное действие в skill-ы executive. Для офлайн-прогона используйте
@@ -381,7 +376,7 @@ Orchestrator забирает реальные Set-of-Mark-кандидаты и
 
 #### Словарь действий VLM (что модель может выбрать)
 `TURN`(угол) · `DRIVE_FORWARD`(±метры, − = назад) · `DRIVE_TO_VISIBLE`(mark_id → ApproachDetection через
-Nav) · `DETECT_ALL`(детект всех объектов + классы, в notes) · `DONE`. Высокоуровневого `GO_TO_FRONTIER`
+Nav) · `DETECT_ALL`(обновить фиксированный context-словарь в notes) · `DONE`. Высокоуровневого `GO_TO_FRONTIER`
 больше нет — модель навигирует сырым движением (честное сравнение с FLAT). Stop — только safety-фоллбэк
 исполнителя, не действие VLM.
 
@@ -436,14 +431,14 @@ orchestrator запоминает map-точку цели; если после b
 | Параметр | Деф. | Зачем |
 |---|---|---|
 | `async_replan` | `false` | `false` = дискретные шаги (едь→стоп→свежее наблюдение→думай). `true` включает overlap replan, но сложнее анализировать логи |
-| `resolve_target_query` | `true` | Перед миссией VLM нормализует сырой `/vlm_mission`: прямые имена оставляет как есть, а загадки/описания переводит в короткую цель для детектора |
+| `resolve_target_query` | `true` | Перед миссией VLM нормализует сырой instruction из `/seek_object`/`/vlm_mission`: прямые имена оставляет как есть, а загадки/описания переводит в короткую цель для детектора |
 | `turn_settle_s` | `2.0` | Пауза после успешного `TURN` перед следующей детекцией/VLM-наблюдением; нужна, чтобы кадр RealSense не был смазан в хвосте поворота. При `async_replan=true` TURN всё равно требует свежего post-settle кадра |
 | `min_effective_turn_rad` | `0.60` | Минимальный исполнимый `TURN`; маленькие повороты VLM нормализуются, потому что Nav2 может засчитать их внутри yaw tolerance без реального движения |
 | `initial_scan_when_target_absent` | `true` | Если строгая цель не видна в начальном кадре, выполнить обзорный sweep перед VLM-поиском: сначала вправо ~90°, затем влево ~180° из правого положения |
 | `initial_scan_left_rad` / `initial_scan_right_rad` | `3.14` / `1.57` | Углы начального обзора: правый кадр после `-1.57rad`, затем левый кадр после двух signed-поворотов `+1.57rad` + `+1.57rad`; так Nav2 не выбирает неоднозначное направление для 180° |
 | `detect_conf` | `0.0` | Legacy override: если >0, одним числом переопределяет оба порога ниже |
 | `target_detect_conf` | `0.60` | Порог конкретной цели для DINO+MobileSAM (`chair`, `drawer cabinet`); строгая цель должна быть увереннее context-подсказок |
-| `detect_all_conf` | `0.08` | Порог обычного `DETECT_ALL` для YOLOE broad-vocab |
+| `detect_all_conf` | `0.08` | Legacy-порог для пустого broad `DETECT_ALL`; в DINO hardware/VLM режиме обычно не используется |
 | `context_detect_conf` | `0.30` | Порог DINO office-context, когда цель не найдена, но нужно найти офисные объекты-подсказки |
 | `context_target_promote_conf` | `0.35` | Legacy no-op: оставлен только чтобы старые команды запуска не падали; context_marks больше не становятся target-candidates |
 | `auto_context_when_target_absent` | `true` | Если цель не найдена, автоматически собрать `context_marks` для semantic-explore |
@@ -464,11 +459,12 @@ orchestrator запоминает map-точку цели; если после b
 > оркестратор сначала делает короткий VLM-запрос нормализации: `office chair` остаётся
 > `office chair`, `black office chair` может пойти в детектор с цветом, а описание вроде
 > `the thing people sit on while working at a desk` нормализуется в `office chair`.
-> Для target-детекции держите `target_detect_conf:=0.60`; обычный `DETECT_ALL` держите мягче:
-> `detect_all_conf:=0.08`, иначе обзор сцены станет слишком бедным.
+> Для target-детекции держите `target_detect_conf:=0.60`; для DINO office-context используйте
+> `context_detect_conf:=0.30`. Пустой broad `DETECT_ALL`/YOLOE в текущем hardware/VLM режиме
+> отключен как шумный для низкой офисной камеры.
 
-> Замечание по RAM: gz + RTAB-Map + Nav2 + YOLOE вместе требуют >4 ГБ. На хосте с ≤4 ГБ запускайте
-> либо детектор отдельно (мир из 3b), ЛИБО nav-стек, но не всё сразу.
+> Замечание по RAM: gz + RTAB-Map + Nav2 + тяжёлый CV backend вместе требуют >4 ГБ. На хосте
+> с ≤4 ГБ запускайте либо детектор отдельно (мир из 3b), ЛИБО nav-стек, но не всё сразу.
 
 > Замечание по симуляции (только gz): перед запуском sim-стека ставь `export GZ_IP=127.0.0.1` — иначе
 > `gz sim` периодически падает с SIGSEGV в потоке gz-transport discovery (известный баг на WSL). На
@@ -490,11 +486,16 @@ orchestrator запоминает map-точку цели; если после b
 ---
 
 ## 5. Запуск миссий
-- **FLAT:** action `/seek_object`, `allow_vlm: false` — миссией владеет executive.
-- **VLM:** опубликуйте цель в `/vlm_mission` (std_msgs/String) — ею владеет orchestrator и
-  управляет skill-ами executive. (`allow_vlm: true` в goal `/seek_object` — это флаг на стороне
-  executive для интегрированного режима.)
-- **Смена цели посреди миссии:** отправьте новый goal `/seek_object` (или новый `/vlm_mission`) —
+- **Операторская команда:** `ros2 run fleet_comms send_mission "<цель>" <true|false>`.
+- **Общее для FLAT и VLM:** hardware/Nav2/executive, edge-camera/SLAM и detector должны быть подняты.
+- **FLAT:** `false` — внутри отправляется action `/seek_object` с `allow_vlm: false`, миссией владеет executive.
+- **Отличие FLAT по терминалам:** не нужен только `planner_orchestrator` и `vlm.env`.
+- **VLM:** `true` — внутри отправляется тот же action `/seek_object`, но `allow_vlm: true`; executive делает handoff:
+  публикует instruction во внутренний `/vlm_mission` и ждёт `mission_end` из `/vlm/activity`.
+- **Отличие VLM по терминалам:** дополнительно нужен `planner_orchestrator` с загруженным `vlm.env`.
+- **`/vlm_mission`:** внутренний/debug-топик для orchestrator; для обычных HIL-прогонов
+  используйте `/seek_object`, чтобы терминал старта был одинаковым для обоих режимов.
+- **Смена цели посреди миссии:** отправьте новый goal `/seek_object` —
   epoch инкрементируется, старая миссия получает PREEMPTED, незавершённые skill-goal-ы отклоняются как zombie.
 
 ## 6. Мониторинг

@@ -61,11 +61,12 @@ def test_select_subgoal_default_productive():
 
 
 def test_select_subgoal_none_when_nothing_to_drive():
-    for s in (STATE.IDLE, STATE.DETECT, STATE.DONE, STATE.FAILED):
+    for s in (STATE.IDLE, STATE.DETECT, STATE.VLM, STATE.DONE, STATE.FAILED):
         assert select_subgoal(s) is None
 
 
 def test_progress_monotone_milestones():
     assert progress_for(STATE.SEARCH) < progress_for(STATE.DETECT)
     assert progress_for(STATE.DETECT) < progress_for(STATE.APPROACH)
+    assert progress_for(STATE.VLM) > progress_for(STATE.SEARCH)
     assert progress_for(STATE.DONE) == 1.0

@@ -21,6 +21,7 @@ setup(
         'console_scripts': [
             'mission_dashboard = fleet_comms.mission_dashboard:main',
             'vlm_mission_logger = fleet_comms.vlm_mission_logger:main',
+            'send_mission = fleet_comms.send_mission:main',
         ],
     },
 )

@@ -11,6 +11,7 @@ finalizes PREEMPTED, the skill servers reject the now-zombie epoch, and the new
 mission re-arms at SEARCH. The pure transition logic lives in executive_fsm.
 """
 import json
+import threading
 import time
 import uuid
 
@@ -31,6 +32,28 @@ from search_coordinator import executive_fsm as fsm
 from search_coordinator.executive_fsm import EVENT, STATE
 
 
+def _norm_target_text(text):
+    return ' '.join(str(text or '').strip().lower().split())
+
+
+def vlm_activity_matches_instruction(payload, instruction):
+    """True when a /vlm/activity JSON event belongs to this SeekObject request."""
+    want = _norm_target_text(instruction)
+    if not want or not isinstance(payload, dict):
+        return False
+    for key in ('raw_query', 'target', 'canonical_target', 'detection_query'):
+        if _norm_target_text(payload.get(key)) == want:
+            return True
+    return False
+
+
+def vlm_activity_stamp(payload):
+    try:
+        return float(payload.get('stamp'))
+    except (TypeError, ValueError, AttributeError):
+        return 0.0
+
+
 class SeekObjectServer:
     def __init__(self, node, mission_state, prompt_bridge, sync_epoch_cb,
                  pixel_fresh_s=1.5):
@@ -44,10 +67,19 @@ class SeekObjectServer:
         # (the tracker streams /target_pixel) with no unexplored frontier left to
         # drive to -- that must become DETECT, not a spurious 'frontiers exhausted'.
         self._no_frontier_detect_wait_s = pixel_fresh_s + 1.5
+        node.declare_parameter('vlm_handoff_start_timeout_s', 10.0)
+        node.declare_parameter('vlm_handoff_result_timeout_s', 0.0)
+        self._vlm_handoff_start_timeout_s = float(
+            node.get_parameter('vlm_handoff_start_timeout_s').value)
+        # 0 means wait until /vlm/activity mission_end, cancel, or supersession.
+        self._vlm_handoff_result_timeout_s = float(
+            node.get_parameter('vlm_handoff_result_timeout_s').value)
 
         self._last_pixel = None
         self._last_pixel_recv_ns = 0
         self._search_start_ns = 0
+        self._vlm_events = []
+        self._vlm_events_lock = threading.Lock()
 
         self._client_group = ReentrantCallbackGroup()
         self._explore = ActionClient(node, ExploreFrontier, 'explore_frontier',
@@ -59,6 +91,9 @@ class SeekObjectServer:
         self._sub_group = ReentrantCallbackGroup()
         node.create_subscription(PointStamped, '/target_pixel', self._on_pixel,
                                  detection_stream_nodeadline(), callback_group=self._sub_group)
+        self._vlm_mission_pub = node.create_publisher(String, '/vlm_mission', 1)
+        node.create_subscription(String, '/vlm/activity', self._on_vlm_activity, 10,
+                                 callback_group=self._sub_group)
 
         self._srv_group = ReentrantCallbackGroup()
         self._server = ActionServer(
@@ -80,6 +115,17 @@ class SeekObjectServer:
     def _on_pixel(self, msg):
         self._last_pixel = msg
         self._last_pixel_recv_ns = self.node.get_clock().now().nanoseconds
+
+    def _on_vlm_activity(self, msg):
+        try:
+            payload = json.loads(msg.data)
+        except (TypeError, json.JSONDecodeError):
+            return
+        if not isinstance(payload, dict):
+            return
+        with self._vlm_events_lock:
+            self._vlm_events.append(payload)
+            self._vlm_events = self._vlm_events[-300:]
 
     def _fresh_pixel_event(self):
         """EVENT.DETECTED if a fresh pixel arrived since SEARCH started, else None."""
@@ -106,6 +152,13 @@ class SeekObjectServer:
 
     def _new_id(self):
         return str(uuid.uuid4())
+
+    def _vlm_events_since(self, since_wall_s):
+        with self._vlm_events_lock:
+            return [
+                ev for ev in self._vlm_events
+                if vlm_activity_stamp(ev) >= float(since_wall_s) - 0.25
+            ]
 
     def _should_abort(self, parent, my_epoch):
         return parent.is_cancel_requested or not self.ms.is_current(my_epoch)
@@ -219,17 +272,126 @@ class SeekObjectServer:
         # Stop is epoch-exempt; drive it best-effort, ignore supersession.
         self._drive_skill(self._stop, goal, my_epoch, parent)
 
+    def _execute_vlm_handoff(self, parent, goal, my_epoch):
+        """Unified /seek_object entry for VLM mode.
+
+        The Pi executive owns the action handle, but the actual high-level policy
+        lives in planner_orchestrator. We forward the instruction to /vlm_mission
+        and keep the action alive until the VLM trace publishes mission_end.
+        """
+        result = SeekObject.Result()
+        start_wall = time.time()
+        msg = String()
+        msg.data = json.dumps({
+            'instruction': goal.instruction,
+            'request_id': goal.request_id or self._new_id(),
+            'mission_epoch': int(my_epoch),
+        }, ensure_ascii=False)
+        self._vlm_mission_pub.publish(msg)
+        self.node.get_logger().info(
+            'SeekObject VLM handoff: published "%s" epoch=%d to /vlm_mission; '
+            'waiting for /vlm/activity'
+            % (goal.instruction, my_epoch))
+        self._broadcast_status(
+            STATE.VLM, epoch=my_epoch, subtask='planner_orchestrator',
+            instruction=goal.instruction, outcome='handoff')
+
+        started = False
+        start_deadline = start_wall + max(0.1, self._vlm_handoff_start_timeout_s)
+        result_deadline = None
+        if self._vlm_handoff_result_timeout_s > 0.0:
+            result_deadline = start_wall + self._vlm_handoff_result_timeout_s
+
+        while rclpy.ok():
+            if parent.is_cancel_requested:
+                self._do_stop(my_epoch, parent, Stop.Goal.SOFT_STOP)
+                self.ms.finish()
+                result.outcome = SeekObject.Result.PREEMPTED
+                result.summary = 'cancelled VLM mission handoff'
+                self._broadcast_status(
+                    STATE.STOP, epoch=my_epoch, instruction=goal.instruction,
+                    outcome='cancelled')
+                parent.canceled()
+                return result
+            if not self.ms.is_current(my_epoch):
+                result.outcome = SeekObject.Result.PREEMPTED
+                result.summary = 'superseded by newer instruction'
+                parent.abort()
+                return result
+
+            self._publish_feedback(
+                parent, my_epoch, STATE.VLM, 'planner_orchestrator',
+                instruction=goal.instruction)
+
+            events = self._vlm_events_since(start_wall)
+            for ev in events:
+                event = str(ev.get('event') or '')
+                if event == 'mission_start' and vlm_activity_matches_instruction(
+                        ev, goal.instruction):
+                    started = True
+                    self._broadcast_status(
+                        STATE.VLM, epoch=my_epoch, subtask='planner_orchestrator',
+                        instruction=goal.instruction, outcome='running')
+                if started and event == 'mission_end':
+                    self.ms.finish()
+                    steps = int(ev.get('steps') or 0)
+                    degraded = bool(ev.get('degraded'))
+                    result.outcome = (
+                        SeekObject.Result.DEGRADED_SUCCESS if degraded
+                        else SeekObject.Result.SUCCEEDED)
+                    result.summary = (
+                        'VLM mission ended after %d steps%s'
+                        % (steps, ' (degraded)' if degraded else ''))
+                    self._publish_feedback(parent, my_epoch, STATE.DONE,
+                                           instruction=goal.instruction)
+                    self._broadcast_status(
+                        STATE.DONE, epoch=my_epoch, instruction=goal.instruction,
+                        outcome=result.summary)
+                    parent.succeed()
+                    return result
+
+            now = time.time()
+            if not started and now >= start_deadline:
+                self.ms.finish()
+                result.outcome = SeekObject.Result.ABORTED
+                result.summary = 'VLM orchestrator did not publish mission_start'
+                self.node.get_logger().warn(result.summary)
+                self._broadcast_status(
+                    STATE.FAILED, epoch=my_epoch, instruction=goal.instruction,
+                    outcome=result.summary)
+                parent.abort()
+                return result
+            if result_deadline is not None and now >= result_deadline:
+                self.ms.finish()
+                result.outcome = SeekObject.Result.ABORTED
+                result.summary = 'VLM mission handoff timed out waiting for mission_end'
+                self.node.get_logger().warn(result.summary)
+                self._broadcast_status(
+                    STATE.FAILED, epoch=my_epoch, instruction=goal.instruction,
+                    outcome=result.summary)
+                parent.abort()
+                return result
+
+            time.sleep(0.2)
+
+        result.outcome = SeekObject.Result.ABORTED
+        result.summary = 'ROS shutdown during VLM mission handoff'
+        parent.abort()
+        return result
+
     # -- main loop ------------------------------------------------------------
 
     def _execute(self, parent):
         goal = parent.request
         my_epoch = self.ms.start_mission(goal.instruction, goal.allow_vlm)
         self.sync_epoch()
-        self.prompt.publish(goal.instruction)
         self._search_start_ns = self.node.get_clock().now().nanoseconds
         self.node.get_logger().info(
             'SeekObject: "%s" epoch=%d allow_vlm=%s' % (goal.instruction, my_epoch, goal.allow_vlm))
+        if goal.allow_vlm:
+            return self._execute_vlm_handoff(parent, goal, my_epoch)
 
+        self.prompt.publish(goal.instruction)
         state = fsm.next_state(STATE.IDLE, EVENT.START)   # -> SEARCH
         result = SeekObject.Result()
 

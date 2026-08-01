@@ -9,6 +9,7 @@
 
   <depend>rclpy</depend>
   <depend>ar_project_msgs</depend>
+  <depend>object_tracking_msgs</depend>
   <depend>std_msgs</depend>
   <depend>sensor_msgs</depend>
   <depend>diagnostic_msgs</depend>

@@ -14,7 +14,7 @@ flowchart TB
 
   subgraph EDGE["EDGE — ПК с GPU"]
     ORCH["planner_orchestrator<br/>VLM-клиент · replan-every-N<br/>circuit-breaker → FLAT"]
-    DET["detect_target_server<br/>YOLOE · Set-of-Mark<br/>Candidate[] + глубина · venv torch"]
+    DET["detect_target_server<br/>DINO+MobileSAM · Set-of-Mark<br/>target + fixed context vocab · глубина"]
     SLAM["RTAB-Map SLAM<br/>RGB-D · /map · map→odom"]
   end
 
@@ -31,7 +31,8 @@ flowchart TB
   EXEC -->|"камера (compressed)"| DET
   DET -->|"/target_pixel · Candidate[]"| EXEC
   SLAM -->|"MapOdomCorrection"| RELAY
-  ORCH -.->|"skill goals · /vlm_mission · только режим vlm"| EXEC
+  EXEC -.->|"/vlm_mission handoff · allow_vlm=true"| ORCH
+  ORCH -.->|"skill goals · только режим vlm"| EXEC
   SENS --> SLAM
   SENS --> NAV
   EXEC --> NAV
@@ -43,7 +44,7 @@ flowchart TB
 - **Внешний VLM API** — отдельный OpenAI-совместимый сервис (`qwen3-vl`), мы его не
   хостим. Креды берутся из env (`VLM_BASE_URL` / `VLM_API_KEY` / `VLM_MODEL`).
 - **EDGE (ПК с GPU)** — тяжёлое восприятие и планирование: детектор `detect_target_server`
-  (YOLOE в venv с torch/CUDA, отдаёт `Candidate[]` + Set-of-Mark кадр), `RTAB-Map`
+  (DINO+MobileSAM в venv с torch/CUDA, отдаёт `Candidate[]` + Set-of-Mark кадр), `RTAB-Map`
   RGB-D SLAM (строит `/map` и коррекцию `map→odom`), `planner_orchestrator` (HTTP-клиент
   к VLM, **только в режиме vlm**).
 - **РОБОТ (Raspberry Pi 5)** — реактивный контур реального времени: executive
@@ -94,7 +95,7 @@ SLAM, детектор и VLM-оркестратор подписываются 
 | Контейнер (профиль) | Уровень схемы | Что внутри |
 |---|---|---|
 | `sim` (`--profile sim`) | весь стек робота в симуляции | Gazebo + `flat_sim_bringup`: sim → RTAB-Map → Nav2 → executive (один процесс, без реального CAN/RealSense) |
-| `detector` (`--profile edge`) | `detect_target_server` (GPU) | YOLOE в venv torch; веса монтируются томом; `--gpus all` |
+| `detector` (`--profile edge`) | `detect_target_server` (GPU) | DINO+MobileSAM в venv torch; веса/cache доступны контейнеру; `--gpus all` |
 | `orchestrator` (`--profile edge`) | `planner_orchestrator` | VLM-клиент; креды из `vlm.env` |
 
 Реальный уровень **РОБОТ (Pi)** с CAN/EPOS4/RealSense в Docker на ПК не

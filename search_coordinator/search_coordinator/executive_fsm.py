@@ -24,6 +24,7 @@ class STATE:
     SEARCH = 'SEARCH'
     DETECT = 'DETECT'
     APPROACH = 'APPROACH'
+    VLM = 'VLM'                 # Handoff to Planner Orchestrator; no FLAT FSM skills
     STOP = 'STOP'
     DEGRADED = 'DEGRADED'     # VLM->FLAT (Phase 5); never entered in FLAT
     DONE = 'DONE'
@@ -101,6 +102,7 @@ def progress_for(state: str) -> float:
         STATE.SEARCH: 0.25,
         STATE.DETECT: 0.5,
         STATE.APPROACH: 0.75,
+        STATE.VLM: 0.5,
         STATE.DONE: 1.0,
         STATE.FAILED: 1.0,
         STATE.STOP: 0.0,

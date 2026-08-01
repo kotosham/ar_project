@@ -7,7 +7,7 @@
 ### 1.1 Принцип разделения
 
 - **`ar_project` (Pi-сторона, executive-on-Pi).** Здесь живут все узлы реального времени и реактивный контур: EKF, облегчённый Nav2, `map_odom_relay`, Search Coordinator (executive FSM/BT), idempotent skill-серверы, `target_pixel_to_goal` (переиспользуется без изменений), `depthimage_to_laserscan`, драйвер RealSense, `ros2_control` + `EmbodiedRobotSystem` (EPOS4 CiA-402 поверх SocketCAN), слой безопасности. VLM на этой стороне нет никогда.
-- **`object_tracking` (edge/PC-сторона).** Здесь живут SLAM (RTAB-Map), открытословарный детектор (YOLOE по умолчанию + GroundingDINO+MobileSAM как fallback, Set-of-Mark), Planner Orchestrator (лёгкий async HTTP-клиент к **внешнему OpenAI-совместимому VLM API**; саму модель здесь не хостим) и семантическая память / буфер заметок. На edge-GPU крутятся только детектор и SLAM; VLM — за API.
+- **`object_tracking` (edge/PC-сторона).** Здесь живут SLAM (RTAB-Map), открытословарный детектор (DINO+MobileSAM по умолчанию для target query и fixed context vocab; YOLOE только legacy/comparison), Planner Orchestrator (лёгкий async HTTP-клиент к **внешнему OpenAI-совместимому VLM API**; саму модель здесь не хостим) и семантическая память / буфер заметок. На edge-GPU крутятся только детектор и SLAM; VLM — за API.
 - **Транспорт между хостами** — `rmw_zenoh` (один systemd-роутер на edge), fallback Fast DDS LARGE_DATA + Discovery Server, multicast выключен, буферы сокетов 12 МБ, синхронизация часов `chrony` на всех хостах, QoS deadline/liveliness на кросс-линковых топиках. PointCloud2 / сырые depth-потоки по Wi-Fi не передаются никогда — `/scan` генерируется локально на Pi.
 
 ### 1.2 Новые пакеты интерфейсов (interface-only)
@@ -284,7 +284,7 @@ uint8 active_mode
 | Облегчение Nav2 (NavFn+DWB, local costmap в odom, controller 8–10 Гц, убрать лишнее) | ar_project | M | 3 | Средний | Сейчас 15 Гц; нужен профайлинг на Pi |
 | Адаптация `target_pixel_to_goal` (снять «soup», обернуть в ApproachDetection) | ar_project | S | 2 | Средний | Не сломать переиспользуемую математику |
 | RTAB-Map: offline mapping→.db + online localization→`MapOdomCorrection` (не TF) | object_tracking | M | 5 | Высокий | Переход от TF-стрима к сообщению-коррекции |
-| `DetectTarget` action + Set-of-Mark рендер (YOLOE default, DINO+MobileSAM fallback) | object_tracking | M | 5 | Средний | Бэкенды есть, нужен сервисный контракт |
+| `DetectTarget` action + Set-of-Mark рендер (DINO+MobileSAM default; YOLOE legacy/comparison) | object_tracking | M | 5 | Средний | Бэкенды есть, нужен сервисный контракт |
 | Детектор: детект staleness потока (no auto-reached на устаревшем пикселе) | object_tracking / search_coordinator | S | 2 | Высокий | Прямой FMEA-фикс |
 | Planner Orchestrator (single-in-flight, UUID, p99-timeout, circuit-breaker, enum tool-call, streaming) | planner_orchestrator | L | 10 | Высокий | Самый трудный edge-компонент |
 | Notes/summary-буфер + бюджет токенов | planner_orchestrator | M | 4 | Средний | Контроль контекста/стоимости |

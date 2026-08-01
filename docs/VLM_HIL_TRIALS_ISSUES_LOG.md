@@ -173,7 +173,8 @@ ros2 topic echo /map_odom_correction --once
 Исправление:
 
 - Целевую детекцию перевели на `GroundingDINO + MobileSAM`.
-- YOLOE оставлен для broad `DETECT_ALL`, но не как главный target detector.
+- YOLOE убран из основного hardware/VLM режима: `model_mode:=dino` грузит только DINO+MobileSAM.
+- `DETECT_ALL` в VLM-пайплайне больше не является пустым broad-vocab обзором; он обновляет фиксированный context-vocab через DINO.
 - Для офисного контекста добавлен DINO office-vocab список.
 - Пороги подняты ближе к дипломной реализации.
 
@@ -182,7 +183,7 @@ ros2 topic echo /map_odom_correction --once
 ```text
 target_detect_conf >= 0.60 для строгой цели
 context_detect_conf около 0.30 для офисных подсказок
-detect_all_conf ниже, только для обзорного режима
+detect_all_conf legacy/no-op для текущих DINO hardware/VLM прогонов
 ```
 
 Проверка:
