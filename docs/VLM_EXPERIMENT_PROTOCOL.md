@@ -5,6 +5,15 @@
 Raw artifacts (`*.jsonl`, `*.csv`) считаются исходными логами и прикладываются
 отдельно. Здесь фиксируются условия сцены, ground truth, метрики и выводы.
 
+Baseline convention:
+
+- VLM mode uses Qwen to reason over target text, Set-of-Mark image, SLAM map,
+  context marks and memory.
+- FLAT mode does not use Qwen. For fairness it may perform one deterministic
+  non-semantic overview scan (`forward -> right -> left`) before `ExploreFrontier`
+  when the target is absent in the initial view. Semantic corridor selection
+  remains VLM-only.
+
 ## Metric definitions
 
 ### Success rate
@@ -41,6 +50,21 @@ motion_time_s = duration_s из step_result для ключевого action
 ```
 
 Для прямого подъезда это длительность `DRIVE_TO_VISIBLE`.
+
+Для сравнения скорости обработки/принятия решения между режимами:
+
+```text
+decision_time_s:
+  VLM mode  = mean positive plan latency_ms / 1000
+              deterministic initial_scan / target_lock / recovery calls excluded
+  FLAT mode = mission_start -> first APPROACH state
+```
+
+Почему VLM не использует `mission_start -> first step_start`: в сценах поиска
+первое действие может быть deterministic `initial_scan` с `latency_ms=0`, то
+есть такая метрика искусственно делает сложные сцены быстрее простых. Для
+диагностики это поле логируется как `time_to_first_action_s`, но в итоговой
+таблице используется именно VLM planning latency.
 
 ### Progress rate
 
@@ -165,6 +189,8 @@ VLM plan latency_ms:
   mean = 1176.42
   min = 968.50
   max = 1802.10
+
+decision_time_s_for_table = 1.18
 ```
 
 Detection/geometry:
@@ -295,6 +321,8 @@ VLM plan latency_ms:
   min = 977.10
   max = 1482.80
   calls = 9
+
+decision_time_s_for_table = 1.14
 ```
 
 Detection/geometry:
@@ -451,6 +479,8 @@ VLM plan latency_ms:
   min = 1102.50
   max = 1227.10
   calls = 5
+
+decision_time_s_for_table = 1.16
 ```
 
 Detection/geometry:
@@ -616,6 +646,8 @@ VLM plan latency_ms, deterministic initial_scan calls excluded:
   max = 31632.00
   p90 = 1877.00
   calls = 68
+
+decision_time_s_for_table = 2.03
 ```
 
 #### Interpretation

@@ -11,6 +11,7 @@ finalizes PREEMPTED, the skill servers reject the now-zombie epoch, and the new
 mission re-arms at SEARCH. The pure transition logic lives in executive_fsm.
 """
 import json
+import math
 import threading
 import time
 import uuid
@@ -19,12 +20,14 @@ import rclpy
 from rclpy.action import ActionClient, ActionServer, CancelResponse, GoalResponse
 from rclpy.callback_groups import ReentrantCallbackGroup
 
-from geometry_msgs.msg import PointStamped
+from geometry_msgs.msg import PointStamped, PoseStamped
 from std_msgs.msg import String
+from tf2_ros import Buffer, ConnectivityException, ExtrapolationException, \
+    LookupException, TransformListener
 
 from object_tracking_msgs.action import SeekObject
 
-from ar_project_msgs.action import ApproachDetection, ExploreFrontier, Stop
+from ar_project_msgs.action import ApproachDetection, ExploreFrontier, GoToPose, Stop
 
 from fleet_comms.qos import control_cmd_latched, detection_stream_nodeadline
 
@@ -34,6 +37,39 @@ from search_coordinator.executive_fsm import EVENT, STATE
 
 def _norm_target_text(text):
     return ' '.join(str(text or '').strip().lower().split())
+
+
+def _wrap_angle(angle):
+    return math.atan2(math.sin(angle), math.cos(angle))
+
+
+def _quat_to_yaw(q):
+    return math.atan2(2.0 * (q.w * q.z + q.x * q.y),
+                      1.0 - 2.0 * (q.y * q.y + q.z * q.z))
+
+
+def _yaw_to_quaternion_zw(yaw):
+    half = 0.5 * float(yaw)
+    return math.sin(half), math.cos(half)
+
+
+def flat_initial_scan_turns(right_rad=1.57, left_rad=3.14):
+    """Relative yaw steps for the non-semantic FLAT overview scan.
+
+    The forward view is observed before these turns. We go right first, then
+    split the left sweep into two 90-degree-ish turns to avoid a single pi-radian
+    goal, where Nav2 may choose either physical rotation direction.
+    """
+    turns = []
+    right = abs(float(right_rad))
+    left = abs(float(left_rad))
+    if right > 1e-3:
+        turns.append(('right', -right))
+    left_step = left / 2.0
+    if left_step > 1e-3:
+        turns.append(('forward', left_step))
+        turns.append(('left', left_step))
+    return turns
 
 
 def vlm_activity_matches_instruction(payload, instruction):
@@ -69,6 +105,13 @@ class SeekObjectServer:
         self._no_frontier_detect_wait_s = pixel_fresh_s + 1.5
         node.declare_parameter('vlm_handoff_start_timeout_s', 10.0)
         node.declare_parameter('vlm_handoff_result_timeout_s', 0.0)
+        node.declare_parameter('flat_initial_scan_enabled', True)
+        node.declare_parameter('flat_initial_scan_forward_wait_s', 1.5)
+        node.declare_parameter('flat_initial_scan_settle_s', 2.0)
+        node.declare_parameter('flat_initial_scan_right_rad', 1.57)
+        node.declare_parameter('flat_initial_scan_left_rad', 3.14)
+        node.declare_parameter('flat_initial_scan_frame', 'odom')
+        node.declare_parameter('flat_initial_scan_robot_frame', 'base_link')
         self._vlm_handoff_start_timeout_s = float(
             node.get_parameter('vlm_handoff_start_timeout_s').value)
         # 0 means wait until /vlm/activity mission_end, cancel, or supersession.
@@ -78,15 +121,21 @@ class SeekObjectServer:
         self._last_pixel = None
         self._last_pixel_recv_ns = 0
         self._search_start_ns = 0
+        self._flat_scan_done_epoch = None
         self._vlm_events = []
         self._vlm_events_lock = threading.Lock()
 
         self._client_group = ReentrantCallbackGroup()
         self._explore = ActionClient(node, ExploreFrontier, 'explore_frontier',
                                      callback_group=self._client_group)
+        self._goto = ActionClient(node, GoToPose, 'go_to_pose',
+                                  callback_group=self._client_group)
         self._approach = ActionClient(node, ApproachDetection, 'approach_detection',
                                       callback_group=self._client_group)
         self._stop = ActionClient(node, Stop, 'stop', callback_group=self._client_group)
+
+        self._tf_buffer = Buffer()
+        self._tf_listener = TransformListener(self._tf_buffer, node)
 
         self._sub_group = ReentrantCallbackGroup()
         node.create_subscription(PointStamped, '/target_pixel', self._on_pixel,
@@ -148,6 +197,9 @@ class SeekObjectServer:
             time.sleep(0.1)
         return None
 
+    def _sleep_or_detect(self, my_epoch, parent, timeout_s):
+        return self._await_detection(my_epoch, parent, max(0.0, float(timeout_s)))
+
     # -- helpers --------------------------------------------------------------
 
     def _new_id(self):
@@ -162,6 +214,44 @@ class SeekObjectServer:
 
     def _should_abort(self, parent, my_epoch):
         return parent.is_cancel_requested or not self.ms.is_current(my_epoch)
+
+    def _current_pose(self, frame):
+        robot_frame = str(self.node.get_parameter(
+            'flat_initial_scan_robot_frame').value)
+        try:
+            tf = self._tf_buffer.lookup_transform(
+                frame, robot_frame, rclpy.time.Time())
+        except (LookupException, ConnectivityException, ExtrapolationException):
+            self.node.get_logger().warn(
+                'flat_initial_scan: no %s->%s TF; skipping scan turn'
+                % (frame, robot_frame))
+            return None
+        t = tf.transform.translation
+        return float(t.x), float(t.y), _quat_to_yaw(tf.transform.rotation)
+
+    def _scan_turn_goal(self, delta_yaw_rad, my_epoch):
+        frame = str(self.node.get_parameter('flat_initial_scan_frame').value)
+        pose = self._current_pose(frame)
+        if pose is None:
+            return None
+        x, y, yaw = pose
+        target_yaw = _wrap_angle(yaw + float(delta_yaw_rad))
+        ps = PoseStamped()
+        ps.header.frame_id = frame
+        ps.header.stamp = self.node.get_clock().now().to_msg()
+        ps.pose.position.x = x
+        ps.pose.position.y = y
+        qz, qw = _yaw_to_quaternion_zw(target_yaw)
+        ps.pose.orientation.z = qz
+        ps.pose.orientation.w = qw
+
+        goal = GoToPose.Goal()
+        goal.request_id = 'flat_scan:' + self._new_id()
+        goal.mission_epoch = my_epoch
+        goal.target_pose = ps
+        goal.xy_tolerance = 0.15
+        goal.yaw_tolerance = 0.25
+        return goal
 
     def _drive_skill(self, client, goal_msg, my_epoch, parent, monitor=None):
         """Dispatch a loopback skill goal; poll until result, honoring parent
@@ -217,7 +307,70 @@ class SeekObjectServer:
 
     # -- state handlers -------------------------------------------------------
 
+    def _do_flat_initial_scan(self, my_epoch, parent):
+        if self._flat_scan_done_epoch == my_epoch:
+            return None
+        if not bool(self.node.get_parameter('flat_initial_scan_enabled').value):
+            self._flat_scan_done_epoch = my_epoch
+            return None
+
+        forward_wait = float(self.node.get_parameter(
+            'flat_initial_scan_forward_wait_s').value)
+        ev = self._await_detection(my_epoch, parent, forward_wait)
+        if ev == EVENT.DETECTED:
+            self._flat_scan_done_epoch = my_epoch
+            self.node.get_logger().info(
+                'flat_initial_scan: target detected in forward view; skip scan')
+            return ev
+
+        right = float(self.node.get_parameter('flat_initial_scan_right_rad').value)
+        left = float(self.node.get_parameter('flat_initial_scan_left_rad').value)
+        settle = float(self.node.get_parameter('flat_initial_scan_settle_s').value)
+        attempted = False
+        for view, delta_yaw in flat_initial_scan_turns(right, left):
+            if self._should_abort(parent, my_epoch):
+                return 'ABORTED'
+            goal = self._scan_turn_goal(delta_yaw, my_epoch)
+            if goal is None:
+                continue
+            attempted = True
+            self.ms.commit(fsm.SKILL_GOTO, {
+                'flat_initial_scan_view': view,
+                'turn_yaw_rad': delta_yaw,
+            }, goal.request_id)
+            self._publish_feedback(
+                parent, my_epoch, STATE.SEARCH, 'FlatInitialScan',
+                instruction=self.ms.instruction)
+            self.node.get_logger().info(
+                'flat_initial_scan: TURN %+.2frad -> %s view'
+                % (delta_yaw, view))
+            kind, payload = self._drive_skill(
+                self._goto, goal, my_epoch, parent, monitor=self._fresh_pixel_event)
+            if kind == 'monitor':
+                return payload
+            if kind == 'aborted':
+                return 'ABORTED'
+            if kind in ('no_server', 'rejected'):
+                self.node.get_logger().warn(
+                    'flat_initial_scan: go_to_pose unavailable (%s); continue to frontiers'
+                    % kind)
+                return None
+            ev = self._sleep_or_detect(my_epoch, parent, settle)
+            if ev == EVENT.DETECTED:
+                self._flat_scan_done_epoch = my_epoch
+                return ev
+        if attempted:
+            self._flat_scan_done_epoch = my_epoch
+            self.node.get_logger().info(
+                'flat_initial_scan: target not detected after forward/right/left overview; '
+                'continue with ExploreFrontier')
+        return None
+
     def _do_search(self, my_epoch, parent):
+        ev = self._do_flat_initial_scan(my_epoch, parent)
+        if ev is not None:
+            return ev
+
         goal = ExploreFrontier.Goal()
         goal.request_id = self._new_id()
         goal.mission_epoch = my_epoch

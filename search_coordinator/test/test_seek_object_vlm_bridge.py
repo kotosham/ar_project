@@ -1,6 +1,7 @@
 """Unit tests for the SeekObject -> /vlm_mission handoff helpers."""
 
 from search_coordinator.seek_object_server import (
+    flat_initial_scan_turns,
     vlm_activity_matches_instruction,
     vlm_activity_stamp,
 )
@@ -32,3 +33,19 @@ def test_vlm_activity_stamp_invalid_is_zero():
     assert vlm_activity_stamp({'stamp': '12.5'}) == 12.5
     assert vlm_activity_stamp({'stamp': 'bad'}) == 0.0
     assert vlm_activity_stamp({}) == 0.0
+
+
+def test_flat_initial_scan_turns_match_vlm_overview_pattern():
+    assert flat_initial_scan_turns(1.57, 3.14) == [
+        ('right', -1.57),
+        ('forward', 1.57),
+        ('left', 1.57),
+    ]
+
+
+def test_flat_initial_scan_turns_are_magnitude_params():
+    assert flat_initial_scan_turns(-0.6, -1.2) == [
+        ('right', -0.6),
+        ('forward', 0.6),
+        ('left', 0.6),
+    ]

@@ -27,6 +27,9 @@ def test_flat_tracker_successful_mission():
     assert row['max_state_reached'] == 'DONE'
     assert row['duration_s'] == 5.0
     assert row['duration_status_s'] == 5.0
+    assert row['time_to_first_action_s'] == 0.0
+    assert row['time_to_detect_s'] == 1.0
+    assert row['time_to_approach_s'] == 2.0
     assert row['states_seen'] == 'SEARCH>DETECT>APPROACH>DONE'
 
 
@@ -41,6 +44,9 @@ def test_flat_tracker_failed_after_search_is_partial_progress():
     assert row['success_auto'] == 0
     assert row['flat_progress_rate'] == 0.33
     assert row['max_state_reached'] == 'SEARCH'
+    assert row['time_to_first_action_s'] == 0.0
+    assert row['time_to_detect_s'] == ''
+    assert row['time_to_approach_s'] == ''
 
 
 def test_flat_tracker_failed_after_approach_stops_at_detection_progress():
@@ -55,6 +61,8 @@ def test_flat_tracker_failed_after_approach_stops_at_detection_progress():
     assert row['success_auto'] == 0
     assert row['flat_progress_rate'] == 0.66
     assert row['max_state_reached'] == 'APPROACH'
+    assert row['time_to_detect_s'] == 1.0
+    assert row['time_to_approach_s'] == 2.0
 
 
 def test_flat_tracker_ignores_vlm_epoch_by_default():

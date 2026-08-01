@@ -33,6 +33,8 @@ CSV_FIELDS = [
     'action',
     'result',
     'duration_s',
+    'mission_elapsed_s',
+    'time_to_first_action_s',
     'latency_ms',
     'n_detections',
     'best_detection_label',
@@ -118,6 +120,8 @@ class VlmMissionLogger(Node):
         self._target = ''
         self._step_cache = {}
         self._notes_summary = ''
+        self._mission_start_rx = 0.0
+        self._first_action_rx = 0.0
 
         self.create_subscription(String, self.activity_topic, self._on_activity,
                                  _activity_qos(depth=50))
@@ -141,7 +145,7 @@ class VlmMissionLogger(Node):
         except (TypeError, ValueError):
             event = {'event': 'raw', 'detail': msg.data}
 
-        self._update_mission_state(event)
+        self._update_mission_state(event, rx)
         self._write_jsonl(event, rx)
         row = self._csv_row(event, rx)
         if row is not None:
@@ -150,7 +154,7 @@ class VlmMissionLogger(Node):
             self._jsonl.flush()
             self._csv.flush()
 
-    def _update_mission_state(self, event):
+    def _update_mission_state(self, event, rx):
         kind = str(event.get('event') or '')
         if kind == 'mission_start':
             self._mission_index += 1
@@ -159,6 +163,8 @@ class VlmMissionLogger(Node):
                 _slug(self.run_id), self._mission_index, _slug(self._target))
             self._step_cache = {}
             self._notes_summary = ''
+            self._mission_start_rx = float(rx)
+            self._first_action_rx = 0.0
         elif kind == 'notes':
             self._notes_summary = str(event.get('summary') or '')
 
@@ -221,6 +227,8 @@ class VlmMissionLogger(Node):
             return None
 
         if kind == 'step_start':
+            if self._mission_start_rx > 0.0 and self._first_action_rx <= 0.0:
+                self._first_action_rx = float(rx)
             cache.update({
                 'action': event.get('action', cache.get('action', '')),
                 'role': event.get('role', cache.get('role', '')),
@@ -265,6 +273,13 @@ class VlmMissionLogger(Node):
             'action': cache.get('action', ''),
             'result': cache.get('result', ''),
             'duration_s': cache.get('duration_s', ''),
+            'mission_elapsed_s': (
+                max(0.0, float(rx) - self._mission_start_rx)
+                if self._mission_start_rx > 0.0 else ''),
+            'time_to_first_action_s': (
+                max(0.0, self._first_action_rx - self._mission_start_rx)
+                if self._mission_start_rx > 0.0 and self._first_action_rx > 0.0
+                else ''),
             'latency_ms': cache.get('latency_ms', ''),
             'n_detections': cache.get('n_detections', ''),
             'best_detection_label': cache.get('best_detection_label', ''),

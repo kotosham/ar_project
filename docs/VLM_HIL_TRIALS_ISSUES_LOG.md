@@ -233,11 +233,24 @@ ros2 topic list | grep costmap
 
 ## 7. Logs / Metrics
 
+### 7.0 FLAT Initial Scan
+
+- Проблема: без scan FLAT проигрывает VLM не по смысловой логике, а потому что
+  не смотрит по сторонам.
+- Фикс: FLAT получил фиксированный несемантический обзор `forward -> right -> left`
+  перед `ExploreFrontier`, если target не найден в стартовом кадре.
+- Отличие от VLM: FLAT не выбирает коридор по объектам-подсказкам; scan только
+  расширяет обзор и карту.
+
 ### 7.1 Persistent Mission Logs
 
 - `vlm_mission_logger`: `/vlm/activity` -> JSONL + CSV.
 - `flat_mission_logger`: `/mission/status` -> JSONL + CSV.
 - Имя файла равно `run_id`.
+- VLM timing: `latency_ms` для планирования шага, `time_to_first_action_s`
+  от `mission_start` до первого `step_start`.
+- FLAT timing: `time_to_detect_s` и `time_to_approach_s` от первого FSM status
+  миссии до соответствующего состояния.
 
 Файлы:
 

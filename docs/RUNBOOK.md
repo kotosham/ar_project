@@ -111,6 +111,9 @@ ros2 run search_coordinator coordinator_node --ros-args \
   -p approach_unknown_bounded_max_step_m:=0.6
 ```
 
+В FLAT, если цель не найдена в стартовом кадре, coordinator делает фиксированный
+несемантический обзор `forward -> right -> left`, затем переходит к `ExploreFrontier`.
+
 ### Edge-ноутбук
 
 **Edge T1 - camera relay + RTAB-Map + dashboard/logger**
@@ -244,8 +247,8 @@ kill %1
 ros2 run fleet_comms send_mission "<цель>" <true|false>
 ```
 
-- `false`: FLAT, `/seek_object allow_vlm=false`, миссией владеет executive.
-- `true`: VLM, `/seek_object allow_vlm=true`, executive публикует instruction во внутренний `/vlm_mission`.
+- `false`: FLAT, `/seek_object allow_vlm=false`, миссией владеет executive; если цель не видна, выполняется фиксированный scan, затем `ExploreFrontier`.
+- `true`: VLM, `/seek_object allow_vlm=true`, executive публикует instruction во внутренний `/vlm_mission`; Qwen выбирает действия по кадру, карте, context marks и памяти.
 - `/vlm_mission` обычному оператору не нужен; это debug/internal topic.
 - Для VLM нужен `Edge T3`; для FLAT `Edge T3` и `vlm.env` не нужны.
 
@@ -284,6 +287,9 @@ ros2 run fleet_comms send_mission "<цель>" <true|false>
 | `turn_settle_s` | `2.0` | Пауза после TURN перед анализом кадра |
 | `min_effective_turn_rad` | `0.60` | Малые TURN нормализуются, потому что Nav2 может засчитать их без движения |
 | `initial_scan_when_target_absent` | `true` | Если цели нет, обзор: forward -> right -> left |
+| `flat_initial_scan_enabled` | `true` | FLAT baseline тоже делает фиксированный обзор, но без VLM-выбора |
+| `flat_initial_scan_forward_wait_s` | `1.5` | Сколько ждать стартовую target-детекцию перед FLAT-scan |
+| `flat_initial_scan_settle_s` | `2.0` | Пауза после FLAT scan-TURN перед проверкой детекции |
 | `approach_max_goal_step_m` | `1.2` | Bounded-step к далекой/плохо раскрытой цели |
 | `approach_direct_clearance_m` | `0.55` | Радиус known-free вокруг direct standoff-точки |
 | `approach_allow_unknown_bounded_goal` | `true` | Разрешить короткий cautious probe через unknown |
@@ -321,6 +327,9 @@ Persistent mission logs пишутся автоматически из `edge_bri
 ~/ros2_ws/experiment_logs/vlm_missions/<run_id>.jsonl
 ~/ros2_ws/experiment_logs/vlm_missions/<run_id>.csv
 ```
+
+Timing поля: VLM CSV пишет `latency_ms` и `time_to_first_action_s`; FLAT CSV
+пишет `time_to_detect_s` и `time_to_approach_s`.
 
 Ручные loggers:
 

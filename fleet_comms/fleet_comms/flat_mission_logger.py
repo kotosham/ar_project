@@ -33,6 +33,9 @@ CSV_FIELDS = [
     'end_iso',
     'duration_s',
     'duration_status_s',
+    'time_to_first_action_s',
+    'time_to_detect_s',
+    'time_to_approach_s',
     'terminal_state',
     'terminal_outcome',
     'max_state_reached',
@@ -161,16 +164,19 @@ class FlatMissionTracker:
             'start_rx': float(rx),
             'start_status_stamp': float(status.get('stamp') or 0.0),
             'states_seen': [],
+            'first_state_rx': {},
         }
 
     def _remember_state(self, status, rx):
-        del rx
         if self.current is None:
             return
         state = status.get('state') or ''
         seen = self.current.setdefault('states_seen', [])
         if state and (not seen or seen[-1] != state):
             seen.append(state)
+        first_state_rx = self.current.setdefault('first_state_rx', {})
+        if state and state not in first_state_rx:
+            first_state_rx[state] = float(rx)
 
     def _max_state_reached(self):
         states = list(self.current.get('states_seen') or []) if self.current else []
@@ -202,6 +208,14 @@ class FlatMissionTracker:
             duration_status = end_stamp - start_stamp
         progress = self._progress_rate(terminal_state)
         success = 1 if terminal_state == 'DONE' else 0
+
+        def elapsed_to_state(*states):
+            first_state_rx = cur.get('first_state_rx') or {}
+            values = [float(first_state_rx[s]) for s in states if s in first_state_rx]
+            if not values:
+                return ''
+            return max(0.0, min(values) - start_rx)
+
         return {
             'rx_iso': _iso(rx),
             'event': 'mission_end',
@@ -216,6 +230,9 @@ class FlatMissionTracker:
             'end_iso': _iso(rx),
             'duration_s': max(0.0, float(rx) - start_rx),
             'duration_status_s': duration_status,
+            'time_to_first_action_s': elapsed_to_state('SEARCH', 'DETECT', 'APPROACH'),
+            'time_to_detect_s': elapsed_to_state('DETECT'),
+            'time_to_approach_s': elapsed_to_state('APPROACH'),
             'terminal_state': terminal_state,
             'terminal_outcome': status.get('outcome', ''),
             'max_state_reached': self._max_state_reached(),

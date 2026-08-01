@@ -44,6 +44,7 @@ class EVENT:
 
 # Skill names the FSM dispatches (loopback action clients in the server).
 SKILL_EXPLORE = 'ExploreFrontier'
+SKILL_GOTO = 'GoToPose'
 SKILL_APPROACH = 'ApproachDetection'
 SKILL_STOP = 'Stop'
 
