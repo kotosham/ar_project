@@ -125,6 +125,91 @@ def select_safe_bounded_goal(target_x, target_y, robot_x, robot_y,
     return None, last_status
 
 
+def path_clearance_status(robot_x, robot_y, goal_x, goal_y, resolution_m,
+                          status_fn, allowed_statuses=('known_free',)):
+    """Check the short straight segment from robot to goal.
+
+    status_fn(x, y) returns 'known_free' for a safe point. Callers may allow
+    'clearance_unknown' for short exploration probes into a SLAM frontier; the
+    first disallowed sample rejects the segment and is returned for logging.
+    """
+    dx = float(goal_x) - float(robot_x)
+    dy = float(goal_y) - float(robot_y)
+    dist = math.hypot(dx, dy)
+    if dist <= 1e-9:
+        return False, 'zero_range'
+    resolution = max(0.02, float(resolution_m))
+    samples = max(1, int(math.ceil(dist / resolution)))
+    allowed = set(str(s) for s in allowed_statuses)
+    accepted_status = 'known_free'
+    for i in range(1, samples + 1):
+        t = float(i) / float(samples)
+        status = str(status_fn(float(robot_x) + dx * t,
+                               float(robot_y) + dy * t))
+        if status not in allowed:
+            return False, status
+        if status != 'known_free':
+            accepted_status = status
+    return True, accepted_status
+
+
+def select_safe_forward_goal(robot_x, robot_y, robot_yaw, desired_step_m,
+                             status_fn, min_step_m=0.3,
+                             step_scales=(1.0, 0.75, 0.55),
+                             lateral_offsets_m=(0.0, 0.25, -0.25, 0.4, -0.4),
+                             path_resolution_m=0.1,
+                             allow_unknown=False,
+                             unknown_max_step_m=0.6):
+    """Pick a safer local exploration goal near "drive forward".
+
+    VLM-level DRIVE_FORWARD means "explore the corridor ahead", not "force the
+    robot's centerline into the exact point straight ahead". Sample a small fan
+    of forward/side-offset candidates. Prefer a fully known-free short segment,
+    but optionally allow a short unknown-frontier segment for active exploration.
+    """
+    desired = abs(float(desired_step_m))
+    if desired <= 1e-9:
+        return None, 'zero_step'
+    min_step = max(0.0, min(float(min_step_m), desired))
+    steps = []
+    for scale in step_scales:
+        step = desired * max(0.0, float(scale))
+        if step >= min_step - 1e-9 and step > 1e-9:
+            if not any(abs(step - prev) < 1e-6 for prev in steps):
+                steps.append(step)
+    if min_step > 1e-9 and not any(abs(min_step - prev) < 1e-6 for prev in steps):
+        steps.append(min_step)
+
+    c = math.cos(float(robot_yaw))
+    s = math.sin(float(robot_yaw))
+    allowed = ['known_free']
+    if allow_unknown:
+        allowed.extend(['unknown', 'clearance_unknown'])
+    unknown_candidate = None
+    last_status = 'not_checked'
+    for step in steps:
+        for lateral in lateral_offsets_m:
+            lateral = float(lateral)
+            gx = float(robot_x) + step * c - lateral * s
+            gy = float(robot_y) + step * s + lateral * c
+            ok, status = path_clearance_status(
+                robot_x, robot_y, gx, gy, path_resolution_m, status_fn,
+                allowed_statuses=allowed)
+            last_status = status
+            if ok and status == 'known_free':
+                return (gx, gy, float(robot_yaw), float(step), lateral, status), status
+            if (ok
+                    and allow_unknown
+                    and unknown_candidate is None
+                    and float(step) <= float(unknown_max_step_m) + 1e-9
+                    and bounded_unknown_status_allowed(status)):
+                unknown_candidate = (
+                    gx, gy, float(robot_yaw), float(step), lateral, status)
+    if unknown_candidate is not None:
+        return unknown_candidate, unknown_candidate[5]
+    return None, last_status
+
+
 def yaw_to_quaternion_zw(yaw):
     """(qz, qw) for a yaw-only rotation (qx = qy = 0)."""
     return (math.sin(yaw / 2.0), math.cos(yaw / 2.0))

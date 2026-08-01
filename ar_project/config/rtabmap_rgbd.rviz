@@ -28,7 +28,7 @@ Panels:
     Experimental: false
     Name: Time
     SyncMode: 0
-    SyncSource: Global Cloud Map
+    SyncSource: ""
 Visualization Manager:
   Class: ""
   Displays:
@@ -342,25 +342,25 @@ Visualization Manager:
   Views:
     Current:
       Class: rviz_default_plugins/Orbit
-      Distance: 4.485721588134766
+      Distance: 5.024008274078369
       Enable Stereo Rendering:
         Stereo Eye Separation: 0.05999999865889549
         Stereo Focal Distance: 1
         Swap Stereo Eyes: false
         Value: false
       Focal Point:
-        X: 0.13700808584690094
-        Y: -0.0944662019610405
-        Z: 0.7844983339309692
+        X: 0.6109539270401001
+        Y: 0.11015539616346359
+        Z: 1.2975095510482788
       Focal Shape Fixed Size: true
       Focal Shape Size: 0.05000000074505806
       Invert Z Axis: false
       Name: Current View
       Near Clip Distance: 0.009999999776482582
-      Pitch: 0.36500072479248047
+      Pitch: 0.7200007438659668
       Target Frame: <Fixed Frame>
       Value: Orbit (rviz)
-      Yaw: 3.0268192291259766
+      Yaw: 3.0368192195892334
     Saved: ~
 Window Geometry:
   Depth Image:

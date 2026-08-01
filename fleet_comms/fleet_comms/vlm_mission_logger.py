@@ -53,11 +53,15 @@ CSV_FIELDS = [
 
 
 def _activity_qos(depth=50):
+    # The logger must record only live experiment events.  /vlm/activity is
+    # published TRANSIENT_LOCAL so dashboards can show recent history, but if a
+    # persistent logger also requests TRANSIENT_LOCAL, restarting it replays old
+    # activity samples and creates phantom duplicate missions in the files.
     return QoSProfile(
         history=HistoryPolicy.KEEP_LAST,
         depth=depth,
         reliability=ReliabilityPolicy.RELIABLE,
-        durability=DurabilityPolicy.TRANSIENT_LOCAL,
+        durability=DurabilityPolicy.VOLATILE,
     )
 
 

@@ -211,7 +211,7 @@ source ~/ros2_ws/src/ar_project/deploy/transport/transport_env.sh
   -p depth_topic:=/camera_edge/aligned_depth_to_color/image_raw \
   -p use_compressed_input:=false \
   -p depth_point_strategy:=nearest_mask \
-  -p target_conf_default:=0.50 \
+  -p target_conf_default:=0.60 \
   -p vocab_conf_default:=0.08
 ```
 
@@ -275,7 +275,12 @@ unset ROS_LOCALHOST_ONLY ROS_STATIC_PEERS ROS_AUTOMATIC_DISCOVERY_RANGE ROS_DISC
 export ROS_DISABLE_ROS2CLI_DAEMON=1
 source ~/ros2_ws/src/ar_project/deploy/transport/transport_env.sh
 
+# Прямое имя объекта:
 ros2 topic pub --once /vlm_mission std_msgs/msg/String "{data: 'chair'}"
+
+# Scene 5 / запрос-загадка: resolver должен нормализовать это в `office chair`.
+ros2 topic pub --once /vlm_mission std_msgs/msg/String \
+  "{data: 'the thing people sit on while working at a desk'}"
 ```
 
 Dashboard: `http://localhost:8088` на edge-ноутбуке.
@@ -431,15 +436,16 @@ orchestrator запоминает map-точку цели; если после b
 | Параметр | Деф. | Зачем |
 |---|---|---|
 | `async_replan` | `false` | `false` = дискретные шаги (едь→стоп→свежее наблюдение→думай). `true` включает overlap replan, но сложнее анализировать логи |
+| `resolve_target_query` | `true` | Перед миссией VLM нормализует сырой `/vlm_mission`: прямые имена оставляет как есть, а загадки/описания переводит в короткую цель для детектора |
 | `turn_settle_s` | `2.0` | Пауза после успешного `TURN` перед следующей детекцией/VLM-наблюдением; нужна, чтобы кадр RealSense не был смазан в хвосте поворота. При `async_replan=true` TURN всё равно требует свежего post-settle кадра |
 | `min_effective_turn_rad` | `0.60` | Минимальный исполнимый `TURN`; маленькие повороты VLM нормализуются, потому что Nav2 может засчитать их внутри yaw tolerance без реального движения |
 | `initial_scan_when_target_absent` | `true` | Если строгая цель не видна в начальном кадре, выполнить обзорный sweep перед VLM-поиском: сначала вправо ~90°, затем влево ~180° из правого положения |
 | `initial_scan_left_rad` / `initial_scan_right_rad` | `3.14` / `1.57` | Углы начального обзора: правый кадр после `-1.57rad`, затем левый кадр после двух signed-поворотов `+1.57rad` + `+1.57rad`; так Nav2 не выбирает неоднозначное направление для 180° |
 | `detect_conf` | `0.0` | Legacy override: если >0, одним числом переопределяет оба порога ниже |
-| `target_detect_conf` | `0.50` | Порог конкретной цели для DINO+MobileSAM (`chair`, `drawer cabinet`) — как в базовой дипломной реализации |
+| `target_detect_conf` | `0.60` | Порог конкретной цели для DINO+MobileSAM (`chair`, `drawer cabinet`); строгая цель должна быть увереннее context-подсказок |
 | `detect_all_conf` | `0.08` | Порог обычного `DETECT_ALL` для YOLOE broad-vocab |
 | `context_detect_conf` | `0.30` | Порог DINO office-context, когда цель не найдена, но нужно найти офисные объекты-подсказки |
-| `context_target_promote_conf` | `0.35` | Если context-DINO нашёл `target_like` объект (`office chair` при цели `chair`) не ниже этого порога, он повышается до настоящего target candidate |
+| `context_target_promote_conf` | `0.35` | Legacy no-op: оставлен только чтобы старые команды запуска не падали; context_marks больше не становятся target-candidates |
 | `auto_context_when_target_absent` | `true` | Если цель не найдена, автоматически собрать `context_marks` для semantic-explore |
 | `semantic_turn_max_streak` | `1` | Сколько смысловых поворотов подряд разрешено до принудительного продвижения вперёд, если путь не блокирован; `1` не даёт роботу “зависать” на осмотре одного пятачка |
 | `finish_on_approach_success` | `true` | Завершить VLM-миссию после успешного финального `DRIVE_TO_VISIBLE`; дальний bounded-step не считается финишем |
@@ -454,10 +460,11 @@ orchestrator запоминает map-точку цели; если после b
 | `vlm_timeout_s` | `30.0` | На медленном эндпоинте/с картой можно поднять до `60`, иначе circuit-breaker → DEGRADED |
 | `replan_every_n` | `3` | Реальная VLM всё равно отдаёт 1 действие за вызов |
 
-> **Цель — ЧИСТЫЙ лейбл объекта** (`bus`, НЕ `find a bus`/`ride to bus`): нормализации запроса нет,
-> YOLOE матчит строку как один класс. `bus` → conf ~0.66; `ride to bus` → ~0.45 (слабее, ложные
-> «доехал» у края кадра). Для target-детекции держите `target_detect_conf:=0.50`;
-> если цель пропадает, временно снижайте до `0.35–0.40`. Обычный `DETECT_ALL` держите мягче:
+> **Цель можно подавать как прямой лейбл или как загадку.** При `resolve_target_query:=true`
+> оркестратор сначала делает короткий VLM-запрос нормализации: `office chair` остаётся
+> `office chair`, `black office chair` может пойти в детектор с цветом, а описание вроде
+> `the thing people sit on while working at a desk` нормализуется в `office chair`.
+> Для target-детекции держите `target_detect_conf:=0.60`; обычный `DETECT_ALL` держите мягче:
 > `detect_all_conf:=0.08`, иначе обзор сцены станет слишком бедным.
 
 > Замечание по RAM: gz + RTAB-Map + Nav2 + YOLOE вместе требуют >4 ГБ. На хосте с ≤4 ГБ запускайте

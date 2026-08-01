@@ -107,7 +107,8 @@ class Nav2Driver:
         except AttributeError:
             self._distance_remaining = float('nan')
 
-    def drive(self, goal_handle, pose, epoch, mission_state, on_tick):
+    def drive(self, goal_handle, pose, epoch, mission_state, on_tick,
+              max_duration_s=0.0):
         """Returns (terminal, reached_pose):
         terminal in {'reached','canceled','zombie','no_server','rejected','failed'}.
         """
@@ -128,6 +129,9 @@ class Nav2Driver:
         self._active = nav_handle
         try:
             result_future = nav_handle.get_result_async()
+            deadline = None
+            if max_duration_s and float(max_duration_s) > 0.0:
+                deadline = time.monotonic() + float(max_duration_s)
             while not result_future.done():
                 if goal_handle.is_cancel_requested:
                     nav_handle.cancel_goal_async()
@@ -135,6 +139,12 @@ class Nav2Driver:
                 if not mission_state.is_current(epoch):
                     nav_handle.cancel_goal_async()
                     return 'zombie', None
+                if deadline is not None and time.monotonic() > deadline:
+                    nav_handle.cancel_goal_async()
+                    self._node.get_logger().warn(
+                        'nav2 drive timeout after %.1fs; canceling goal'
+                        % float(max_duration_s))
+                    return 'failed', None
                 on_tick(self._distance_remaining)
                 time.sleep(0.1)
             status = result_future.result().status
@@ -197,9 +207,48 @@ class GoToPoseServer(SkillServer):
     action_type = GoToPose
     action_name = 'go_to_pose'
 
+    def __init__(self, node, mission_state, nav_driver):
+        super().__init__(node, mission_state, nav_driver)
+        self._last_map = None
+        self._sub_group = ReentrantCallbackGroup()
+        self.tf_buffer = Buffer()
+        self.tf_listener = TransformListener(self.tf_buffer, node)
+        node.declare_parameter('goto_safe_forward_enabled', True)
+        node.declare_parameter('goto_safe_forward_request_prefix', 'safe_forward:')
+        node.declare_parameter('goto_safe_forward_map_topic', '/map')
+        node.declare_parameter('goto_safe_forward_robot_frame', 'base_link')
+        node.declare_parameter('goto_safe_forward_occupancy_threshold', 65)
+        node.declare_parameter('goto_safe_forward_clearance_m', 0.40)
+        node.declare_parameter('goto_safe_forward_min_step_m', 0.30)
+        node.declare_parameter('goto_safe_forward_path_resolution_m', 0.10)
+        node.declare_parameter('goto_safe_forward_allow_unknown', True)
+        node.declare_parameter('goto_safe_forward_unknown_max_step_m', 0.60)
+        node.declare_parameter('goto_safe_forward_step_scales',
+                               [1.0, 0.75, 0.55])
+        node.declare_parameter('goto_safe_forward_lateral_offsets_m',
+                               [0.0, 0.25, -0.25, 0.40, -0.40])
+        node.declare_parameter('goto_safe_forward_timeout_s', 8.0)
+        node.create_subscription(
+            OccupancyGrid,
+            node.get_parameter('goto_safe_forward_map_topic').value,
+            self._on_map, _latched_qos(), callback_group=self._sub_group)
+
+    def _on_map(self, msg):
+        self._last_map = msg
+
     def _run(self, goal_handle):
         goal = goal_handle.request
         result = GoToPose.Result()
+        pose = goal.target_pose
+        timeout_s = 0.0
+
+        if self._is_safe_forward(goal):
+            pose = self._safe_forward_pose(goal)
+            timeout_s = float(
+                self.node.get_parameter('goto_safe_forward_timeout_s').value)
+            if pose is None:
+                result.outcome = GoToPose.Result.ABORTED
+                return 'abort', result
 
         def tick(dist):
             fb = GoToPose.Feedback()
@@ -207,8 +256,8 @@ class GoToPoseServer(SkillServer):
             fb.stamp = self.node.get_clock().now().to_msg()
             goal_handle.publish_feedback(fb)
 
-        terminal, reached = self.nav.drive(goal_handle, goal.target_pose,
-                                           goal.mission_epoch, self.ms, tick)
+        terminal, reached = self.nav.drive(goal_handle, pose, goal.mission_epoch,
+                                           self.ms, tick, max_duration_s=timeout_s)
         if terminal == 'reached':
             result.outcome = GoToPose.Result.SUCCEEDED
             result.reached_pose = reached
@@ -221,6 +270,114 @@ class GoToPoseServer(SkillServer):
             return 'abort', result
         result.outcome = GoToPose.Result.ABORTED
         return 'abort', result
+
+    def _is_safe_forward(self, goal):
+        if not bool(self.node.get_parameter('goto_safe_forward_enabled').value):
+            return False
+        prefix = str(self.node.get_parameter(
+            'goto_safe_forward_request_prefix').value)
+        return str(getattr(goal, 'request_id', '')).startswith(prefix)
+
+    @staticmethod
+    def _pose_yaw(pose):
+        q = pose.pose.orientation
+        return math.atan2(2.0 * (q.w * q.z + q.x * q.y),
+                          1.0 - 2.0 * (q.y * q.y + q.z * q.z))
+
+    @staticmethod
+    def _float_list(values, fallback):
+        try:
+            return [float(v) for v in values]
+        except (TypeError, ValueError):
+            return list(fallback)
+
+    def _safe_forward_pose(self, goal):
+        original = goal.target_pose
+        frame = original.header.frame_id or 'map'
+        grid = self._last_map
+        if grid is None:
+            self.node.get_logger().warn(
+                'go_to_pose: safe_forward skipped (no map), using requested goal')
+            return original
+        if grid.header.frame_id and grid.header.frame_id != frame:
+            self.node.get_logger().warn(
+                'go_to_pose: safe_forward skipped (goal frame=%s, map frame=%s)'
+                % (frame, grid.header.frame_id))
+            return original
+
+        robot_frame = str(self.node.get_parameter(
+            'goto_safe_forward_robot_frame').value)
+        try:
+            tf_rob = self.tf_buffer.lookup_transform(frame, robot_frame,
+                                                     rclpy.time.Time())
+        except (LookupException, ConnectivityException, ExtrapolationException):
+            self.node.get_logger().warn(
+                'go_to_pose: safe_forward skipped (no %s->%s TF), using requested goal'
+                % (frame, robot_frame))
+            return original
+
+        rx = float(tf_rob.transform.translation.x)
+        ry = float(tf_rob.transform.translation.y)
+        requested_x = float(original.pose.position.x)
+        requested_y = float(original.pose.position.y)
+        desired_step = math.hypot(requested_x - rx, requested_y - ry)
+        yaw = self._pose_yaw(original)
+        if desired_step <= 1e-6:
+            self.node.get_logger().info(
+                'go_to_pose: safe_forward has zero-length goal; using requested pose')
+            return original
+
+        info = grid.info
+        origin = info.origin.position
+        origin_yaw = ag.quaternion_to_yaw(info.origin.orientation.z,
+                                          info.origin.orientation.w)
+        threshold = int(self.node.get_parameter(
+            'goto_safe_forward_occupancy_threshold').value)
+        clearance = float(self.node.get_parameter(
+            'goto_safe_forward_clearance_m').value)
+
+        def status_at(x, y):
+            ok, status = ag.occupancy_clearance_status_at_world(
+                grid.data, info.width, info.height, info.resolution,
+                origin.x, origin.y, origin_yaw, x, y, clearance,
+                occupied_threshold=threshold)
+            return status if ok else 'clearance_%s' % status
+
+        selected, last_status = ag.select_safe_forward_goal(
+            rx, ry, yaw, desired_step, status_at,
+            min_step_m=float(self.node.get_parameter(
+                'goto_safe_forward_min_step_m').value),
+            step_scales=self._float_list(self.node.get_parameter(
+                'goto_safe_forward_step_scales').value, [1.0, 0.75, 0.55]),
+            lateral_offsets_m=self._float_list(self.node.get_parameter(
+                'goto_safe_forward_lateral_offsets_m').value,
+                [0.0, 0.25, -0.25, 0.4, -0.4]),
+            path_resolution_m=float(self.node.get_parameter(
+                'goto_safe_forward_path_resolution_m').value),
+            allow_unknown=bool(self.node.get_parameter(
+                'goto_safe_forward_allow_unknown').value),
+            unknown_max_step_m=float(self.node.get_parameter(
+                'goto_safe_forward_unknown_max_step_m').value))
+        if selected is None:
+            self.node.get_logger().warn(
+                'go_to_pose: safe_forward ABORTED (no safe fan candidate; '
+                'requested=(%.2f,%.2f), step=%.2fm, last_status=%s)'
+                % (requested_x, requested_y, desired_step, last_status))
+            return None
+
+        gx, gy, gyaw, step, lateral, status = selected
+        pose = PoseStamped()
+        pose.header.frame_id = frame
+        pose.header.stamp = self.node.get_clock().now().to_msg()
+        pose.pose.position = Point(x=float(gx), y=float(gy), z=0.0)
+        qz, qw = ag.yaw_to_quaternion_zw(gyaw)
+        pose.pose.orientation.z = qz
+        pose.pose.orientation.w = qw
+        self.node.get_logger().info(
+            'go_to_pose: safe_forward selected goal=(%.2f,%.2f) '
+            'from requested=(%.2f,%.2f), step=%.2fm lateral=%+.2fm status=%s'
+            % (gx, gy, requested_x, requested_y, step, lateral, status))
+        return pose
 
 
 class ExploreFrontierServer(SkillServer):

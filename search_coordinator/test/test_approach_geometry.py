@@ -15,9 +15,11 @@ from search_coordinator.approach_geometry import (
     occupancy_clearance_status_at_world,
     occupancy_known_free_at_world,
     occupancy_value_at_world,
+    path_clearance_status,
     pixel_age_s,
     quaternion_to_yaw,
     select_safe_bounded_goal,
+    select_safe_forward_goal,
     valid_depth,
     yaw_to_quaternion_zw,
 )
@@ -134,6 +136,111 @@ def test_select_safe_bounded_goal_still_rejects_occupied_when_unknown_allowed():
         robot_x=0.0, robot_y=0.0,
         max_step_m=1.2, min_step_m=0.35, resolution_m=0.2,
         status_fn=lambda _x, _y: 'clearance_occupied_100',
+        allow_unknown=True,
+        unknown_max_step_m=0.6)
+    assert selected is None
+    assert last_status == 'clearance_occupied_100'
+
+
+def test_path_clearance_status_checks_intermediate_segment():
+    def status(x, _y):
+        return 'clearance_occupied_100' if x > 0.4 else 'known_free'
+
+    ok, status_name = path_clearance_status(
+        0.0, 0.0, 0.8, 0.0, 0.1, status)
+    assert not ok
+    assert status_name == 'clearance_occupied_100'
+
+
+def test_select_safe_forward_goal_prefers_center_when_clear():
+    selected, last_status = select_safe_forward_goal(
+        robot_x=0.0, robot_y=0.0, robot_yaw=0.0, desired_step_m=0.55,
+        status_fn=lambda _x, _y: 'known_free',
+        lateral_offsets_m=(0.0, 0.25, -0.25))
+    assert selected is not None
+    gx, gy, yaw, step, lateral, status = selected
+    assert math.isclose(gx, 0.55, abs_tol=1e-9)
+    assert math.isclose(gy, 0.0, abs_tol=1e-9)
+    assert math.isclose(yaw, 0.0, abs_tol=1e-9)
+    assert math.isclose(step, 0.55, abs_tol=1e-9)
+    assert lateral == 0.0
+    assert status == 'known_free'
+    assert last_status == 'known_free'
+
+
+def test_select_safe_forward_goal_shifts_side_when_center_endpoint_blocked():
+    def status(x, y):
+        if x > 0.5 and abs(y) < 0.1:
+            return 'clearance_occupied_100'
+        return 'known_free'
+
+    selected, last_status = select_safe_forward_goal(
+        robot_x=0.0, robot_y=0.0, robot_yaw=0.0, desired_step_m=0.55,
+        status_fn=status,
+        lateral_offsets_m=(0.0, 0.25, -0.25),
+        path_resolution_m=0.1)
+    assert selected is not None
+    gx, gy, yaw, step, lateral, safe_status = selected
+    assert math.isclose(gx, 0.55, abs_tol=1e-9)
+    assert math.isclose(gy, 0.25, abs_tol=1e-9)
+    assert math.isclose(yaw, 0.0, abs_tol=1e-9)
+    assert math.isclose(step, 0.55, abs_tol=1e-9)
+    assert math.isclose(lateral, 0.25, abs_tol=1e-9)
+    assert safe_status == 'known_free'
+    assert last_status == 'known_free'
+
+
+def test_select_safe_forward_goal_reports_when_no_fan_candidate_is_safe():
+    selected, last_status = select_safe_forward_goal(
+        robot_x=0.0, robot_y=0.0, robot_yaw=0.0, desired_step_m=0.55,
+        status_fn=lambda _x, _y: 'clearance_unknown',
+        lateral_offsets_m=(0.0, 0.25, -0.25))
+    assert selected is None
+    assert last_status == 'clearance_unknown'
+
+
+def test_select_safe_forward_goal_allows_short_unknown_frontier_when_enabled():
+    selected, last_status = select_safe_forward_goal(
+        robot_x=0.0, robot_y=0.0, robot_yaw=0.0, desired_step_m=0.55,
+        status_fn=lambda _x, _y: 'clearance_unknown',
+        lateral_offsets_m=(0.0, 0.25, -0.25),
+        allow_unknown=True,
+        unknown_max_step_m=0.6)
+    assert selected is not None
+    gx, gy, yaw, step, lateral, safe_status = selected
+    assert math.isclose(gx, 0.55, abs_tol=1e-9)
+    assert math.isclose(gy, 0.0, abs_tol=1e-9)
+    assert math.isclose(yaw, 0.0, abs_tol=1e-9)
+    assert math.isclose(step, 0.55, abs_tol=1e-9)
+    assert lateral == 0.0
+    assert safe_status == 'clearance_unknown'
+    assert last_status == 'clearance_unknown'
+
+
+def test_select_safe_forward_goal_prefers_known_free_over_unknown_frontier():
+    def status(_x, y):
+        return 'clearance_unknown' if abs(y) < 0.01 else 'known_free'
+
+    selected, last_status = select_safe_forward_goal(
+        robot_x=0.0, robot_y=0.0, robot_yaw=0.0, desired_step_m=0.55,
+        status_fn=status,
+        lateral_offsets_m=(0.0, 0.25, -0.25),
+        allow_unknown=True,
+        unknown_max_step_m=0.6)
+    assert selected is not None
+    gx, gy, _yaw, _step, lateral, safe_status = selected
+    assert math.isclose(gx, 0.55, abs_tol=1e-9)
+    assert math.isclose(gy, 0.25, abs_tol=1e-9)
+    assert math.isclose(lateral, 0.25, abs_tol=1e-9)
+    assert safe_status == 'known_free'
+    assert last_status == 'known_free'
+
+
+def test_select_safe_forward_goal_still_rejects_occupied_when_unknown_enabled():
+    selected, last_status = select_safe_forward_goal(
+        robot_x=0.0, robot_y=0.0, robot_yaw=0.0, desired_step_m=0.55,
+        status_fn=lambda _x, _y: 'clearance_occupied_100',
+        lateral_offsets_m=(0.0, 0.25, -0.25),
         allow_unknown=True,
         unknown_max_step_m=0.6)
     assert selected is None
