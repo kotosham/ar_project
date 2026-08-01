@@ -104,8 +104,9 @@ class VlmMissionLogger(Node):
         self.flush_every_event = bool(self.get_parameter('flush_every_event').value)
 
         self.output_dir.mkdir(parents=True, exist_ok=True)
-        self.jsonl_path = self.output_dir / ('vlm_activity_%s.jsonl' % _slug(self.run_id))
-        self.csv_path = self.output_dir / ('vlm_steps_%s.csv' % _slug(self.run_id))
+        artifact_stem = _slug(self.run_id)
+        self.jsonl_path = self.output_dir / ('%s.jsonl' % artifact_stem)
+        self.csv_path = self.output_dir / ('%s.csv' % artifact_stem)
         self._jsonl = self.jsonl_path.open('a', encoding='utf-8')
         self._csv = self.csv_path.open('a', newline='', encoding='utf-8')
         self._csv_writer = csv.DictWriter(self._csv, fieldnames=CSV_FIELDS)

@@ -216,7 +216,7 @@ target_confirm[target]: 1 raw -> 1 confirmed over 2 observation(s)
 target_confirm[target]: 1 raw -> 0 confirmed over 2 observation(s)
 ```
 
-Проверка: смотреть события `target_confirm` в `vlm_activity_*.jsonl`.
+Проверка: смотреть события `target_confirm` в mission logger JSONL.
 
 ## 8. Context object ошибочно становился целью
 
@@ -689,15 +689,15 @@ ros2 topic list | grep costmap
 Файлы:
 
 ```text
-~/ros2_ws/experiment_logs/vlm_missions/vlm_activity_<run_id>.jsonl
-~/ros2_ws/experiment_logs/vlm_missions/vlm_steps_<run_id>.csv
+~/ros2_ws/experiment_logs/vlm_missions/<run_id>.jsonl
+~/ros2_ws/experiment_logs/vlm_missions/<run_id>.csv
 ```
 
 Что смотреть:
 
 ```bash
-tail -40 ~/ros2_ws/experiment_logs/vlm_missions/vlm_activity_office_chair_001.jsonl
-tail -30 ~/ros2_ws/experiment_logs/vlm_missions/vlm_steps_office_chair_001.csv
+tail -40 ~/ros2_ws/experiment_logs/vlm_missions/office_chair_001.jsonl
+tail -30 ~/ros2_ws/experiment_logs/vlm_missions/office_chair_001.csv
 ```
 
 Ключевые события:

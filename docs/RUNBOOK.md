@@ -115,9 +115,20 @@ ros2 run search_coordinator coordinator_node --ros-args \
 
 **Edge T1 - camera relay + RTAB-Map + dashboard/logger**
 
+Для FLAT-экспериментов:
+
 ```bash
 ros2 launch ar_project edge_bringup.launch.py \
-  vlm_log_run_id:=office_chair_001
+  flat_log_run_id:=flat_scene_1 \
+  start_vlm_logger:=false
+```
+
+Для VLM-экспериментов:
+
+```bash
+ros2 launch ar_project edge_bringup.launch.py \
+  vlm_log_run_id:=vlm_scene_1 \
+  start_flat_logger:=false
 ```
 
 **Edge T2 - detector / Set-of-Mark**
@@ -300,20 +311,27 @@ ros2 node list
 ros2 action list
 ```
 
-Persistent mission logs пишутся автоматически из `edge_bringup.launch.py` и
-`vlm_sim_bringup.launch.py`:
+Persistent mission logs пишутся автоматически из `edge_bringup.launch.py`.
+Для осмысленных имён файлов добавляй `flat_log_run_id:=flat_scene_1` или
+`vlm_log_run_id:=vlm_scene_1`.
 
 ```text
-~/ros2_ws/experiment_logs/vlm_missions/vlm_activity_<run_id>.jsonl
-~/ros2_ws/experiment_logs/vlm_missions/vlm_steps_<run_id>.csv
+~/ros2_ws/experiment_logs/flat_missions/<run_id>.jsonl
+~/ros2_ws/experiment_logs/flat_missions/<run_id>.csv
+~/ros2_ws/experiment_logs/vlm_missions/<run_id>.jsonl
+~/ros2_ws/experiment_logs/vlm_missions/<run_id>.csv
 ```
 
-Ручной logger:
+Ручные loggers:
 
 ```bash
+ros2 run fleet_comms flat_mission_logger --ros-args \
+  -p output_dir:=~/ros2_ws/experiment_logs/flat_missions \
+  -p run_id:=flat_scene_1
+
 ros2 run fleet_comms vlm_mission_logger --ros-args \
   -p output_dir:=~/ros2_ws/experiment_logs/vlm_missions \
-  -p run_id:=office_chair_001
+  -p run_id:=vlm_scene_1
 ```
 
 ## 9. Ожидаемая деградация

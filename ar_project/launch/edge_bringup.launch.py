@@ -12,8 +12,8 @@ It starts:
   3. rtabmap_map_odom_correction_publisher.py — wraps RTAB-Map /mapGraph
      map_to_odom into /map_odom_correction. The Pi-side map_odom_relay gates
      that correction and owns the local map->odom TF.
-  4. mission_dashboard + vlm_mission_logger — live operator view and persistent
-     JSONL/CSV traces of /vlm/activity.
+  4. mission_dashboard + mission loggers — live operator view plus persistent
+     JSONL/CSV traces for VLM (/vlm/activity) and FLAT (/mission/status).
 
 The detector and VLM orchestrator still start from the ML venv (they need
 torch/cv2), but MUST also be pointed at /camera_edge/*:
@@ -57,6 +57,9 @@ def generate_launch_description():
     sync_queue_size = LaunchConfiguration('sync_queue_size')
     publish_tf_map = LaunchConfiguration('publish_tf_map')
     start_map_odom_correction = LaunchConfiguration('start_map_odom_correction')
+    start_flat_logger = LaunchConfiguration('start_flat_logger')
+    flat_log_output_dir = LaunchConfiguration('flat_log_output_dir')
+    flat_log_run_id = LaunchConfiguration('flat_log_run_id')
     start_vlm_logger = LaunchConfiguration('start_vlm_logger')
     vlm_log_output_dir = LaunchConfiguration('vlm_log_output_dir')
     vlm_log_run_id = LaunchConfiguration('vlm_log_run_id')
@@ -121,6 +124,21 @@ def generate_launch_description():
             'dashboard_port',
             default_value='8088',
             description='HTTP port of the mission dashboard.',
+        ),
+        DeclareLaunchArgument(
+            'start_flat_logger',
+            default_value='true',
+            description='Persist FLAT /mission/status runs as JSONL + compact CSV on the edge host.',
+        ),
+        DeclareLaunchArgument(
+            'flat_log_output_dir',
+            default_value='~/ros2_ws/experiment_logs/flat_missions',
+            description='Directory for FLAT mission logger artifacts.',
+        ),
+        DeclareLaunchArgument(
+            'flat_log_run_id',
+            default_value='',
+            description='Optional run id prefix for FLAT mission logs. Empty means timestamp.',
         ),
         DeclareLaunchArgument(
             'start_vlm_logger',
@@ -202,6 +220,18 @@ def generate_launch_description():
             }],
             output='screen',
             condition=IfCondition(LaunchConfiguration('start_dashboard')),
+        ),
+        Node(
+            package='fleet_comms',
+            executable='flat_mission_logger',
+            name='flat_mission_logger',
+            parameters=[{
+                'use_sim_time': False,
+                'output_dir': flat_log_output_dir,
+                'run_id': flat_log_run_id,
+            }],
+            output='screen',
+            condition=IfCondition(start_flat_logger),
         ),
         Node(
             package='fleet_comms',
