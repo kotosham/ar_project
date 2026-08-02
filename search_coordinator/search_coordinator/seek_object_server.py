@@ -97,12 +97,14 @@ class SeekObjectServer:
         self.ms = mission_state
         self.prompt = prompt_bridge
         self.sync_epoch = sync_epoch_cb
-        self._pixel_fresh_s = pixel_fresh_s
+        node.declare_parameter('flat_target_pixel_max_age_s', 4.0)
+        self._pixel_fresh_s = float(
+            node.get_parameter('flat_target_pixel_max_age_s').value)
         # When ExploreFrontier reports NO_FRONTIER, wait this long for a fresh
         # detection before declaring failure: the target can be visible at spawn
         # (the tracker streams /target_pixel) with no unexplored frontier left to
         # drive to -- that must become DETECT, not a spurious 'frontiers exhausted'.
-        self._no_frontier_detect_wait_s = pixel_fresh_s + 1.5
+        self._no_frontier_detect_wait_s = self._pixel_fresh_s + 1.5
         node.declare_parameter('vlm_handoff_start_timeout_s', 10.0)
         node.declare_parameter('vlm_handoff_result_timeout_s', 0.0)
         node.declare_parameter('flat_initial_scan_enabled', True)

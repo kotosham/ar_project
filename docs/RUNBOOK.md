@@ -109,6 +109,7 @@ ros2 run search_coordinator coordinator_node --ros-args \
   -p approach_direct_if_goal_in_known_free_map:=true \
   -p approach_allow_unknown_bounded_goal:=true \
   -p approach_unknown_bounded_max_step_m:=0.6 \
+  -p flat_target_pixel_max_age_s:=4.0 \
   -p flat_initial_scan_forward_wait_s:=4.0 \
   -p flat_initial_scan_settle_s:=2.0 \
   -p flat_initial_scan_view_detect_wait_s:=2.0
@@ -151,7 +152,9 @@ ros2 launch object_tracking sam_node.launch.py \
   use_depth_input:=true \
   depth_topic:=/camera_edge/aligned_depth_to_color/image_raw \
   input_reliability:=best_effort \
+  continuous_inference_rate:=1.0 \
   target_publish_rate:=3.0 \
+  target_conf_default:=0.60 \
   enable_search_rotation:=false
 ```
 
@@ -310,7 +313,7 @@ ros2 run fleet_comms send_mission "<цель>" <true|false>
 
 | Параметр | Деф. | Смысл |
 |---|---:|---|
-| `target_conf_default` | `0.50` | Дефолт детектора; в HIL запускаем `0.60` для строгой target-детекции |
+| `target_conf_default` | `0.60` | Порог целевой DINO-детекции; одинаковый для VLM action detector и FLAT continuous tracker |
 | `target_detect_conf` | `0.60` | Порог цели в orchestrator |
 | `context_detect_conf` | `0.30` | Порог DINO context-объектов |
 | `async_replan` | `false` | Дискретно: ехать -> стоп -> наблюдать -> думать |
