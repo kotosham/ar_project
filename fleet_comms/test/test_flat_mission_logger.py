@@ -83,3 +83,24 @@ def test_flat_tracker_starts_new_epoch():
 
     assert first['mission_index'] == 1
     assert second['mission_index'] == 2
+
+
+def test_flat_tracker_ignores_terminal_without_active_mission():
+    tracker = FlatMissionTracker('flat_scene_5')
+
+    assert tracker.update(_status('FAILED', epoch=1, instruction='chair'), rx=10.0) is None
+    assert tracker.mission_index == 0
+
+
+def test_flat_tracker_ignores_duplicate_terminal_status():
+    tracker = FlatMissionTracker('flat_scene_6')
+
+    tracker.update(_status('SEARCH', epoch=1, instruction='chair'), rx=10.0)
+    row = tracker.update(_status('FAILED', epoch=1, instruction='chair'), rx=11.0)
+    duplicate = tracker.update(
+        _status('FAILED', epoch=1, instruction='chair', outcome='frontiers exhausted'),
+        rx=12.0)
+
+    assert row['mission_index'] == 1
+    assert duplicate is None
+    assert tracker.mission_index == 1

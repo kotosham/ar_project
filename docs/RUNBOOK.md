@@ -108,7 +108,10 @@ ros2 run search_coordinator coordinator_node --ros-args \
   -p approach_direct_clearance_m:=0.55 \
   -p approach_direct_if_goal_in_known_free_map:=true \
   -p approach_allow_unknown_bounded_goal:=true \
-  -p approach_unknown_bounded_max_step_m:=0.6
+  -p approach_unknown_bounded_max_step_m:=0.6 \
+  -p flat_initial_scan_forward_wait_s:=4.0 \
+  -p flat_initial_scan_settle_s:=2.0 \
+  -p flat_initial_scan_view_detect_wait_s:=2.0
 ```
 
 В FLAT, если цель не найдена в стартовом кадре, coordinator делает фиксированный
@@ -134,7 +137,34 @@ ros2 launch ar_project edge_bringup.launch.py \
   start_flat_logger:=false
 ```
 
-**Edge T2 - detector / Set-of-Mark**
+**Edge T2-FLAT - continuous detector (`/target_pixel`)**
+
+FLAT-режим ждет поток `/target_pixel`, поэтому здесь нужен continuous tracker,
+а не action-сервер VLM.
+
+```bash
+ros2 launch object_tracking sam_node.launch.py \
+  model_mode:=dino_mobilesam \
+  tracking_mode:=continuous \
+  use_compressed_input:=false \
+  image_topic:=/camera_edge/color/image_raw \
+  use_depth_input:=true \
+  depth_topic:=/camera_edge/aligned_depth_to_color/image_raw \
+  input_reliability:=best_effort \
+  target_publish_rate:=3.0 \
+  enable_search_rotation:=false
+```
+
+Быстрая проверка после отправки FLAT-миссии:
+
+```bash
+ros2 topic info /target_pixel -v
+timeout 8 ros2 topic echo /target_pixel --once
+```
+
+У `/target_pixel` должен быть publisher `rgb_tracker_node`.
+
+**Edge T2-VLM - action detector / Set-of-Mark**
 
 ```bash
 /home/user/.venvs/ros-jazzy-ml/bin/python -m object_tracking.detect_target_server \

@@ -132,6 +132,11 @@ class FlatMissionTracker:
             return None
         if state not in TRACKED_STATES:
             return None
+        # A terminal snapshot can be published twice (first state, then same state
+        # with a human-readable outcome). Do not let a terminal-only message create
+        # a phantom mission row after the real mission has already been closed.
+        if self.current is None and state in TERMINAL_STATES:
+            return None
 
         if self._needs_new_mission(status):
             self._start(status, rx)

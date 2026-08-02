@@ -106,8 +106,9 @@ class SeekObjectServer:
         node.declare_parameter('vlm_handoff_start_timeout_s', 10.0)
         node.declare_parameter('vlm_handoff_result_timeout_s', 0.0)
         node.declare_parameter('flat_initial_scan_enabled', True)
-        node.declare_parameter('flat_initial_scan_forward_wait_s', 1.5)
+        node.declare_parameter('flat_initial_scan_forward_wait_s', 4.0)
         node.declare_parameter('flat_initial_scan_settle_s', 2.0)
+        node.declare_parameter('flat_initial_scan_view_detect_wait_s', 2.0)
         node.declare_parameter('flat_initial_scan_right_rad', 1.57)
         node.declare_parameter('flat_initial_scan_left_rad', 3.14)
         node.declare_parameter('flat_initial_scan_frame', 'odom')
@@ -176,14 +177,24 @@ class SeekObjectServer:
             self._vlm_events.append(payload)
             self._vlm_events = self._vlm_events[-300:]
 
-    def _fresh_pixel_event(self):
+    def _fresh_pixel_event(self, min_recv_ns=0):
         """EVENT.DETECTED if a fresh pixel arrived since SEARCH started, else None."""
         if self._last_pixel is None or self._last_pixel_recv_ns <= self._search_start_ns:
             return None
-        age = (self.node.get_clock().now().nanoseconds - self._last_pixel_recv_ns) / 1e9
+        if min_recv_ns and self._last_pixel_recv_ns <= int(min_recv_ns):
+            return None
+        now_ns = self.node.get_clock().now().nanoseconds
+        stamp_s = (
+            float(self._last_pixel.header.stamp.sec)
+            + float(self._last_pixel.header.stamp.nanosec) / 1e9
+        )
+        if stamp_s > 0.0:
+            age = now_ns / 1e9 - stamp_s
+        else:
+            age = (now_ns - self._last_pixel_recv_ns) / 1e9
         return EVENT.DETECTED if age <= self._pixel_fresh_s else None
 
-    def _await_detection(self, my_epoch, parent, timeout_s):
+    def _await_detection(self, my_epoch, parent, timeout_s, min_recv_ns=0):
         """Poll for a fresh /target_pixel for up to timeout_s. Returns EVENT.DETECTED
         or None. Honors parent cancel + epoch supersession. Used to catch a target
         that is already in view when there is no frontier left to explore."""
@@ -191,7 +202,7 @@ class SeekObjectServer:
         while self.node.get_clock().now().nanoseconds < deadline:
             if self._should_abort(parent, my_epoch):
                 return None
-            ev = self._fresh_pixel_event()
+            ev = self._fresh_pixel_event(min_recv_ns=min_recv_ns)
             if ev is not None:
                 return ev
             time.sleep(0.1)
@@ -199,6 +210,14 @@ class SeekObjectServer:
 
     def _sleep_or_detect(self, my_epoch, parent, timeout_s):
         return self._await_detection(my_epoch, parent, max(0.0, float(timeout_s)))
+
+    def _sleep_ignoring_detections(self, my_epoch, parent, timeout_s):
+        deadline = self.node.get_clock().now().nanoseconds + int(max(0.0, float(timeout_s)) * 1e9)
+        while self.node.get_clock().now().nanoseconds < deadline:
+            if self._should_abort(parent, my_epoch):
+                return False
+            time.sleep(0.1)
+        return True
 
     # -- helpers --------------------------------------------------------------
 
@@ -326,6 +345,8 @@ class SeekObjectServer:
         right = float(self.node.get_parameter('flat_initial_scan_right_rad').value)
         left = float(self.node.get_parameter('flat_initial_scan_left_rad').value)
         settle = float(self.node.get_parameter('flat_initial_scan_settle_s').value)
+        view_detect_wait = float(self.node.get_parameter(
+            'flat_initial_scan_view_detect_wait_s').value)
         attempted = False
         for view, delta_yaw in flat_initial_scan_turns(right, left):
             if self._should_abort(parent, my_epoch):
@@ -344,10 +365,7 @@ class SeekObjectServer:
             self.node.get_logger().info(
                 'flat_initial_scan: TURN %+.2frad -> %s view'
                 % (delta_yaw, view))
-            kind, payload = self._drive_skill(
-                self._goto, goal, my_epoch, parent, monitor=self._fresh_pixel_event)
-            if kind == 'monitor':
-                return payload
+            kind, payload = self._drive_skill(self._goto, goal, my_epoch, parent)
             if kind == 'aborted':
                 return 'ABORTED'
             if kind in ('no_server', 'rejected'):
@@ -355,7 +373,15 @@ class SeekObjectServer:
                     'flat_initial_scan: go_to_pose unavailable (%s); continue to frontiers'
                     % kind)
                 return None
-            ev = self._sleep_or_detect(my_epoch, parent, settle)
+            if settle > 0.0:
+                self.node.get_logger().info(
+                    'flat_initial_scan: settle %.1fs before detecting %s view'
+                    % (settle, view))
+            if not self._sleep_ignoring_detections(my_epoch, parent, settle):
+                return 'ABORTED'
+            detect_start_ns = self.node.get_clock().now().nanoseconds
+            ev = self._await_detection(
+                my_epoch, parent, view_detect_wait, min_recv_ns=detect_start_ns)
             if ev == EVENT.DETECTED:
                 self._flat_scan_done_epoch = my_epoch
                 return ev
