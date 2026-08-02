@@ -110,7 +110,7 @@ class SeekObjectServer:
         node.declare_parameter('flat_initial_scan_enabled', True)
         node.declare_parameter('flat_initial_scan_forward_wait_s', 4.0)
         node.declare_parameter('flat_initial_scan_settle_s', 2.0)
-        node.declare_parameter('flat_initial_scan_view_detect_wait_s', 2.0)
+        node.declare_parameter('flat_initial_scan_view_detect_wait_s', 4.0)
         node.declare_parameter('flat_initial_scan_right_rad', 1.57)
         node.declare_parameter('flat_initial_scan_left_rad', 3.14)
         node.declare_parameter('flat_initial_scan_frame', 'odom')

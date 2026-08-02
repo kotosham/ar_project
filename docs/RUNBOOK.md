@@ -112,7 +112,7 @@ ros2 run search_coordinator coordinator_node --ros-args \
   -p flat_target_pixel_max_age_s:=4.0 \
   -p flat_initial_scan_forward_wait_s:=4.0 \
   -p flat_initial_scan_settle_s:=2.0 \
-  -p flat_initial_scan_view_detect_wait_s:=2.0
+  -p flat_initial_scan_view_detect_wait_s:=4.0
 ```
 
 В FLAT, если цель не найдена в стартовом кадре, coordinator делает фиксированный
@@ -150,12 +150,7 @@ ros2 launch object_tracking sam_node.launch.py \
   use_compressed_input:=false \
   image_topic:=/camera_edge/color/image_raw \
   use_depth_input:=true \
-  depth_topic:=/camera_edge/aligned_depth_to_color/image_raw \
-  input_reliability:=best_effort \
-  continuous_inference_rate:=1.0 \
-  target_publish_rate:=3.0 \
-  target_conf_default:=0.60 \
-  enable_search_rotation:=false
+  depth_topic:=/camera_edge/aligned_depth_to_color/image_raw
 ```
 
 Быстрая проверка после отправки FLAT-миссии:
@@ -321,8 +316,11 @@ ros2 run fleet_comms send_mission "<цель>" <true|false>
 | `min_effective_turn_rad` | `0.60` | Малые TURN нормализуются, потому что Nav2 может засчитать их без движения |
 | `initial_scan_when_target_absent` | `true` | Если цели нет, обзор: forward -> right -> left |
 | `flat_initial_scan_enabled` | `true` | FLAT baseline тоже делает фиксированный обзор, но без VLM-выбора |
-| `flat_initial_scan_forward_wait_s` | `1.5` | Сколько ждать стартовую target-детекцию перед FLAT-scan |
+| `flat_initial_scan_forward_wait_s` | `4.0` | Сколько ждать стартовую target-детекцию перед FLAT-scan |
 | `flat_initial_scan_settle_s` | `2.0` | Пауза после FLAT scan-TURN перед проверкой детекции |
+| `flat_initial_scan_view_detect_wait_s` | `4.0` | Окно ожидания свежей target-детекции после стабилизации FLAT scan-ракурса |
+| `continuous_inference_rate` | `0.5` | Частота DINO/SAM в FLAT continuous tracker; ниже, чтобы не душить RGB-D/RTAB-Map |
+| `continuous_header_max_age` | `2.0` | Не публиковать `/target_pixel`, если RGB `header.stamp` уже старый |
 | `approach_max_goal_step_m` | `1.2` | Bounded-step к далекой/плохо раскрытой цели |
 | `approach_direct_clearance_m` | `0.55` | Радиус known-free вокруг direct standoff-точки |
 | `approach_allow_unknown_bounded_goal` | `true` | Разрешить короткий cautious probe через unknown |
