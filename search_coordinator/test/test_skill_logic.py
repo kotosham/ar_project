@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from search_coordinator.skill_logic import (
     approach_not_reached_outcome,
     explore_goal_xy,
+    flat_approach_event,
     is_fresh,
     nav_succeeded,
     resolve_frontier,
@@ -75,6 +76,38 @@ def test_resolve_exclude_none_is_noop():
 def test_approach_outcome():
     assert approach_not_reached_outcome(have_pixel=False) == 'LOST_TARGET'
     assert approach_not_reached_outcome(have_pixel=True) == 'STALE_DETECTION'
+
+
+def test_flat_approach_direct_success_reaches_target():
+    assert flat_approach_event(
+        succeeded=True,
+        bounded_step=False,
+        final_distance_m=3.0,
+        final_threshold_m=0.93) == 'REACHED'
+
+
+def test_flat_approach_bounded_step_continues_while_target_far():
+    assert flat_approach_event(
+        succeeded=True,
+        bounded_step=True,
+        final_distance_m=2.32,
+        final_threshold_m=0.93) == 'LOST'
+
+
+def test_flat_approach_bounded_step_can_finish_when_close_enough():
+    assert flat_approach_event(
+        succeeded=True,
+        bounded_step=True,
+        final_distance_m=0.62,
+        final_threshold_m=0.93) == 'REACHED'
+
+
+def test_flat_approach_failed_skill_returns_lost():
+    assert flat_approach_event(
+        succeeded=False,
+        bounded_step=False,
+        final_distance_m=0.2,
+        final_threshold_m=0.93) == 'LOST'
 
 
 def test_is_fresh():

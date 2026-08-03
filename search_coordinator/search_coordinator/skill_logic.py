@@ -103,6 +103,33 @@ def is_fresh(age_s: Optional[float], max_age_s: float) -> bool:
     return age_s is not None and age_s <= max_age_s
 
 
+def _distance_is_known(distance_m) -> bool:
+    try:
+        d = float(distance_m)
+    except (TypeError, ValueError):
+        return False
+    return math.isfinite(d) and d > 0.0
+
+
+def flat_approach_event(succeeded: bool,
+                        bounded_step: bool,
+                        final_distance_m,
+                        final_threshold_m: float) -> str:
+    """Map an ApproachDetection result to the FLAT FSM event.
+
+    A bounded visual approach is only a short map-growing probe toward the target.
+    Reaching that intermediate Nav2 pose is progress, not mission completion,
+    unless it already leaves the robot within the final standoff threshold.
+    """
+    if not succeeded:
+        return 'LOST'
+    if not bounded_step:
+        return 'REACHED'
+    if not _distance_is_known(final_distance_m):
+        return 'LOST'
+    return 'REACHED' if float(final_distance_m) <= float(final_threshold_m) else 'LOST'
+
+
 def nav_succeeded(status: int) -> bool:
     """Map a Nav2 action GoalStatus to a reached/ok boolean."""
     return status == GOAL_STATUS_SUCCEEDED

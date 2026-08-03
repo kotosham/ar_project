@@ -16,6 +16,7 @@ from pathlib import Path
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
+from std_msgs.msg import Float32
 from std_msgs.msg import String
 
 
@@ -36,6 +37,8 @@ CSV_FIELDS = [
     'time_to_first_action_s',
     'time_to_detect_s',
     'time_to_approach_s',
+    'detector_runtime_mean_s',
+    'detector_runtime_samples',
     'terminal_state',
     'terminal_outcome',
     'max_state_reached',
@@ -170,6 +173,7 @@ class FlatMissionTracker:
             'start_status_stamp': float(status.get('stamp') or 0.0),
             'states_seen': [],
             'first_state_rx': {},
+            'detector_runtime_values': [],
         }
 
     def _remember_state(self, status, rx):
@@ -182,6 +186,17 @@ class FlatMissionTracker:
         first_state_rx = self.current.setdefault('first_state_rx', {})
         if state and state not in first_state_rx:
             first_state_rx[state] = float(rx)
+
+    def record_detector_runtime(self, runtime_s):
+        if self.current is None:
+            return
+        try:
+            value = float(runtime_s)
+        except (TypeError, ValueError):
+            return
+        if value <= 0.0:
+            return
+        self.current.setdefault('detector_runtime_values', []).append(value)
 
     def _max_state_reached(self):
         states = list(self.current.get('states_seen') or []) if self.current else []
@@ -213,6 +228,11 @@ class FlatMissionTracker:
             duration_status = end_stamp - start_stamp
         progress = self._progress_rate(terminal_state)
         success = 1 if terminal_state == 'DONE' else 0
+        runtime_values = [
+            float(v) for v in cur.get('detector_runtime_values', [])
+            if isinstance(v, (float, int)) and float(v) > 0.0
+        ]
+        detector_runtime_mean = runtime_values[-1] if runtime_values else ''
 
         def elapsed_to_state(*states):
             first_state_rx = cur.get('first_state_rx') or {}
@@ -238,6 +258,8 @@ class FlatMissionTracker:
             'time_to_first_action_s': elapsed_to_state('SEARCH', 'DETECT', 'APPROACH'),
             'time_to_detect_s': elapsed_to_state('DETECT'),
             'time_to_approach_s': elapsed_to_state('APPROACH'),
+            'detector_runtime_mean_s': detector_runtime_mean,
+            'detector_runtime_samples': len(runtime_values),
             'terminal_state': terminal_state,
             'terminal_outcome': status.get('outcome', ''),
             'max_state_reached': self._max_state_reached(),
@@ -252,6 +274,7 @@ class FlatMissionLogger(Node):
     def __init__(self):
         super().__init__('flat_mission_logger')
         self.declare_parameter('status_topic', '/mission/status')
+        self.declare_parameter('cv_runtime_topic', '/experiment/cv_runtime')
         self.declare_parameter('output_dir', '~/ros2_ws/experiment_logs/flat_missions')
         self.declare_parameter('run_id', '')
         self.declare_parameter('scene_id', '')
@@ -260,6 +283,7 @@ class FlatMissionLogger(Node):
         self.declare_parameter('flush_every_event', True)
 
         self.status_topic = str(self.get_parameter('status_topic').value)
+        self.cv_runtime_topic = str(self.get_parameter('cv_runtime_topic').value)
         self.output_dir = Path(os.path.expanduser(
             str(self.get_parameter('output_dir').value))).resolve()
         configured_run_id = str(self.get_parameter('run_id').value).strip()
@@ -285,6 +309,7 @@ class FlatMissionLogger(Node):
 
         self.create_subscription(String, self.status_topic, self._on_status,
                                  _status_qos(depth=50))
+        self.create_subscription(Float32, self.cv_runtime_topic, self._on_cv_runtime, 10)
         self.get_logger().info(
             'FLAT mission logger writing JSONL=%s CSV=%s'
             % (self.jsonl_path, self.csv_path))
@@ -312,6 +337,9 @@ class FlatMissionLogger(Node):
         if self.flush_every_event:
             self._jsonl.flush()
             self._csv.flush()
+
+    def _on_cv_runtime(self, msg):
+        self._tracker.record_detector_runtime(float(msg.data))
 
     def _write_jsonl(self, status, rx):
         current = self._tracker.current or self._tracker.last_context or {}

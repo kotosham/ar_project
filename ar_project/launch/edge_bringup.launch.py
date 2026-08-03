@@ -9,10 +9,12 @@ It starts:
      One compressed RGB + one compressedDepth + one CameraInfo stream cross the
      link; the relay decompresses once and republishes raw on /camera_edge/*.
   2. rtabmap_rgbd_launch.py wired to /camera_edge/* (edge-local, free).
-  3. rtabmap_map_odom_correction_publisher.py — wraps RTAB-Map /mapGraph
+  3. frontier_extractor — turns the edge-local SLAM /map into /frontiers for
+     the Pi-side FLAT ExploreFrontier skill.
+  4. rtabmap_map_odom_correction_publisher.py — wraps RTAB-Map /mapGraph
      map_to_odom into /map_odom_correction. The Pi-side map_odom_relay gates
      that correction and owns the local map->odom TF.
-  4. mission_dashboard + mission loggers — live operator view plus persistent
+  5. mission_dashboard + mission loggers — live operator view plus persistent
      JSONL/CSV traces for VLM (/vlm/activity) and FLAT (/mission/status).
 
 The detector and VLM orchestrator still start from the ML venv (they need
@@ -57,6 +59,7 @@ def generate_launch_description():
     sync_queue_size = LaunchConfiguration('sync_queue_size')
     publish_tf_map = LaunchConfiguration('publish_tf_map')
     start_map_odom_correction = LaunchConfiguration('start_map_odom_correction')
+    start_frontier_extractor = LaunchConfiguration('start_frontier_extractor')
     start_flat_logger = LaunchConfiguration('start_flat_logger')
     flat_log_output_dir = LaunchConfiguration('flat_log_output_dir')
     flat_log_run_id = LaunchConfiguration('flat_log_run_id')
@@ -114,6 +117,11 @@ def generate_launch_description():
             'start_map_odom_correction',
             default_value='true',
             description='Publish /map_odom_correction from RTAB-Map /mapGraph for the Pi-side map_odom_relay.',
+        ),
+        DeclareLaunchArgument(
+            'start_frontier_extractor',
+            default_value='true',
+            description='Publish /frontiers from the edge-local SLAM /map for FLAT ExploreFrontier.',
         ),
         DeclareLaunchArgument(
             'start_dashboard',
@@ -186,7 +194,27 @@ def generate_launch_description():
             }.items(),
             condition=IfCondition(start_slam),
         ),
-        # 3. Convert RTAB-Map's optimized map->odom into a low-rate correction
+        # 3. Extract SLAM frontiers on the edge. /frontiers is tiny, while /map
+        # stays edge-local; the Pi-side SearchCoordinator consumes the result.
+        Node(
+            package='search_coordinator',
+            executable='frontier_extractor',
+            name='frontier_extractor',
+            parameters=[{
+                'use_sim_time': False,
+                'map_topic': '/map',
+                'frontiers_topic': '/frontiers',
+                'markers_topic': '/frontiers/markers',
+                'map_frame': 'map',
+                'robot_base_frame': 'base_link',
+            }],
+            output='screen',
+            condition=IfCondition(PythonExpression([
+                "'", start_slam, "' == 'true' and '",
+                start_frontier_extractor, "' == 'true'",
+            ])),
+        ),
+        # 4. Convert RTAB-Map's optimized map->odom into a low-rate correction
         # message. The Pi relay gates it and republishes the fresh local TF.
         Node(
             package='ar_project',
@@ -206,7 +234,7 @@ def generate_launch_description():
                 start_map_odom_correction, "' == 'true'",
             ])),
         ),
-        # 4. Human-readable mission dashboard (per-component health, VLM
+        # 5. Human-readable mission dashboard (per-component health, VLM
         # thinking/actions, robot view). Edge-hosted so the heavy views stay
         # link-free; open http://<edge-host>:8088.
         Node(

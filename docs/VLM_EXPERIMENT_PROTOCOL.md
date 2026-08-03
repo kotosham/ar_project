@@ -57,7 +57,7 @@ motion_time_s = duration_s из step_result для ключевого action
 decision_time_s:
   VLM mode  = mean positive plan latency_ms / 1000
               deterministic initial_scan / target_lock / recovery calls excluded
-  FLAT mode = mission_start -> first APPROACH state
+  FLAT mode = mean detector_runtime_mean_s from the continuous tracker
 ```
 
 Почему VLM не использует `mission_start -> first step_start`: в сценах поиска
@@ -65,6 +65,14 @@ decision_time_s:
 есть такая метрика искусственно делает сложные сцены быстрее простых. Для
 диагностики это поле логируется как `time_to_first_action_s`, но в итоговой
 таблице используется именно VLM planning latency.
+
+Почему FLAT не использует `time_to_detect_s` / `time_to_approach_s` для
+сравнения с VLM latency: эти поля считаются от старта миссии и включают
+физический обзор сцены (`initial_scan`), повороты, стабилизацию кадра и ожидание
+валидной depth-точки. Это полезные поведенческие поля, но это не время работы
+детектора. Для сравнения вычислительной задержки FLAT используется
+`detector_runtime_mean_s`, который публикуется continuous tracker'ом как среднее
+время DINO+SAM сегментации на кадр.
 
 ### Progress rate
 
@@ -689,3 +697,43 @@ main_claim: hidden target search works in 4/5 repeats; the remaining failure
 next_fix_focus: keep a pending 2D target lock for unknown-depth target probes
                 and prevent repeated failed forward probes near blockers.
 ```
+
+## Comparative Table Values
+
+Эти значения используются для компактной таблицы сравнения режимов на
+колёсной платформе. `Time (s)` здесь означает latency обработки/решения, а не
+полную длительность миссии:
+
+```text
+VLM  Time (s) = mean positive planner latency_ms / 1000
+FLAT Time (s) = mean detector runtime (DINO+SAM avg_seg / detector_runtime_mean_s)
+```
+
+### FLAT baseline, scenes 1-2
+
+```text
+raw_logs:
+  scene_1 = ~/ros2_ws/experiment_logs/flat_missions/flat_scene_1.*
+  scene_2 = ~/ros2_ws/experiment_logs/flat_missions/flat_scene_2.*
+```
+
+| Scene | Setup | Success | Progress | Time, s | Notes |
+| --- | --- | ---: | ---: | ---: | --- |
+| 1 | Visible / reachable | 1.00 | 1.00 | 0.48 | All 5 runs reached the visible drawer cabinet directly. |
+| 2 | Visible / unmapped | 1.00 | 0.60 | 0.38 | All 5 runs reached an office chair, but only run 4 navigated from the initially visible target; runs 1, 2, 3, 5 lost the initial target due invalid depth and reached another chair after scan. |
+
+Scene 2 manual progress:
+
+```text
+run_progress = [0.50, 0.50, 0.50, 1.00, 0.50]
+mean_progress = 3.00 / 5 = 0.60
+```
+
+The automatic FSM progress in the raw FLAT CSV is `1.00` for all completed
+missions because the executive only knows that a valid target class was reached.
+For the paper table, scene 2 uses the manual progress above, which evaluates
+whether the run followed the originally visible but initially unmapped chair.
+
+All FLAT runs reached an object of the target class; however, in 4/5 runs the
+initially visible chair was not used for navigation due to invalid depth, so
+semantic task progress was penalized.

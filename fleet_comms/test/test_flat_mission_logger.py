@@ -33,6 +33,19 @@ def test_flat_tracker_successful_mission():
     assert row['states_seen'] == 'SEARCH>DETECT>APPROACH>DONE'
 
 
+def test_flat_tracker_records_detector_runtime_during_mission():
+    tracker = FlatMissionTracker('flat_scene_runtime')
+
+    tracker.record_detector_runtime(99.0)
+    tracker.update(_status('SEARCH', stamp=10.0), rx=100.0)
+    tracker.record_detector_runtime(0.52)
+    tracker.record_detector_runtime(0.48)
+    row = tracker.update(_status('DONE', stamp=12.0, outcome='reached'), rx=102.0)
+
+    assert row['detector_runtime_mean_s'] == 0.48
+    assert row['detector_runtime_samples'] == 2
+
+
 def test_flat_tracker_failed_after_search_is_partial_progress():
     tracker = FlatMissionTracker('flat_scene_2')
 

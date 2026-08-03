@@ -708,28 +708,39 @@ class ApproachDetectionServer(SkillServer):
                 result.final_distance_m = float(goal_info.get('expected_final_distance_m', 0.0))
                 result.reached_pose = reached
                 return 'succeed', result
-            # FMEA: declare reached if the detection is STILL fresh, OR if we tracked
-            # it until we were already near the goal (the detector's min-range blind
-            # spot, not a moved/false target). Lost-while-far stays STALE/LOST.
+            result.final_distance_m = float(goal_info.get('expected_final_distance_m', 0.0))
+            result.reached_pose = reached
+            if not result.bounded_step:
+                cur = self._last_pixel
+                cage = self._pixel_age(cur) if cur is not None else None
+                self.node.get_logger().info(
+                    'approach_detection: SUCCEEDED (reached final approach pose; '
+                    'last detection age=%s)'
+                    % ('%.2fs' % cage if cage is not None else 'none'))
+                result.outcome = ApproachDetection.Result.SUCCEEDED
+                return 'succeed', result
+            # Bounded mode only reached a short intermediate pose. Report that
+            # progress as a successful skill result when the target stream stayed
+            # credible, but let the caller decide whether the mission is done.
             cur = self._last_pixel
             cage = self._pixel_age(cur) if cur is not None else None
             if is_fresh(cage, max_age):
                 self.node.get_logger().info(
-                    'approach_detection: SUCCEEDED (reached pose, detection fresh age=%.2fs)'
-                    % (cage if cage is not None else -1.0))
+                    'approach_detection: BOUNDED_STEP_REACHED '
+                    '(reached intermediate pose, detection fresh age=%.2fs, '
+                    'final_distance=%.2fm)'
+                    % (cage if cage is not None else -1.0, result.final_distance_m))
                 result.outcome = ApproachDetection.Result.SUCCEEDED
-                result.final_distance_m = float(goal_info.get('expected_final_distance_m', 0.0))
-                result.reached_pose = reached
                 return 'succeed', result
             if tracked['min_fresh_dist'] <= reacquire_dist:
                 self.node.get_logger().info(
-                    'approach_detection: SUCCEEDED (reached pose; target tracked to %.2fm <= '
-                    '%.2fm then lost at close range, age=%s)'
+                    'approach_detection: BOUNDED_STEP_REACHED '
+                    '(reached intermediate pose; target tracked to %.2fm <= '
+                    '%.2fm then lost near step goal, age=%s, final_distance=%.2fm)'
                     % (tracked['min_fresh_dist'], reacquire_dist,
-                       '%.2fs' % cage if cage is not None else 'none'))
+                       '%.2fs' % cage if cage is not None else 'none',
+                       result.final_distance_m))
                 result.outcome = ApproachDetection.Result.SUCCEEDED
-                result.final_distance_m = float(goal_info.get('expected_final_distance_m', 0.0))
-                result.reached_pose = reached
                 return 'succeed', result
             self.node.get_logger().warn(
                 'approach_detection: reached pose but detection NOT fresh (age=%s) and target '

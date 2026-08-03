@@ -249,8 +249,11 @@ ros2 topic list | grep costmap
 - Имя файла равно `run_id`.
 - VLM timing: `latency_ms` для планирования шага, `time_to_first_action_s`
   от `mission_start` до первого `step_start`.
-- FLAT timing: `time_to_detect_s` и `time_to_approach_s` от первого FSM status
-  миссии до соответствующего состояния.
+- FLAT decision/perception timing: `detector_runtime_mean_s` из continuous
+  tracker (`/experiment/cv_runtime`) как среднее время DINO+SAM на кадр.
+- FLAT behavior timing: `time_to_detect_s` и `time_to_approach_s` от первого FSM
+  status миссии до соответствующего состояния. Эти поля включают scan/повороты и
+  не сравниваются напрямую с VLM `latency_ms`.
 
 Файлы:
 

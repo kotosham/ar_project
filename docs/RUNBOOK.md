@@ -120,7 +120,7 @@ ros2 run search_coordinator coordinator_node --ros-args \
 
 ### Edge-ноутбук
 
-**Edge T1 - camera relay + RTAB-Map + dashboard/logger**
+**Edge T1 - camera relay + RTAB-Map + frontiers + dashboard/logger**
 
 Для FLAT-экспериментов:
 
@@ -137,6 +137,18 @@ ros2 launch ar_project edge_bringup.launch.py \
   vlm_log_run_id:=vlm_scene_1 \
   start_flat_logger:=false
 ```
+
+Быстрая проверка frontier-режима:
+
+```bash
+ros2 node list | grep -E 'frontier_extractor|rtabmap'
+ros2 topic info /frontiers -v
+timeout 8 ros2 topic echo /frontiers --once
+```
+
+Важно: `/frontiers` в `topic list` сам по себе ничего не доказывает. Topic может
+появиться только из-за подписчика `search_coordinator`; нужен publisher от
+`/frontier_extractor`.
 
 **Edge T2-FLAT - continuous detector (`/target_pixel`)**
 
@@ -320,7 +332,7 @@ ros2 run fleet_comms send_mission "<цель>" <true|false>
 | `flat_initial_scan_settle_s` | `2.0` | Пауза после FLAT scan-TURN перед проверкой детекции |
 | `flat_initial_scan_view_detect_wait_s` | `4.0` | Окно ожидания свежей target-детекции после стабилизации FLAT scan-ракурса |
 | `continuous_inference_rate` | `0.5` | Частота DINO/SAM в FLAT continuous tracker; ниже, чтобы не душить RGB-D/RTAB-Map |
-| `continuous_header_max_age` | `2.0` | Не публиковать `/target_pixel`, если RGB `header.stamp` уже старый |
+| `continuous_header_max_age` | `3.5` | Не публиковать `/target_pixel`, если RGB `header.stamp` уже старый |
 | `approach_max_goal_step_m` | `1.2` | Bounded-step к далекой/плохо раскрытой цели |
 | `approach_direct_clearance_m` | `0.55` | Радиус known-free вокруг direct standoff-точки |
 | `approach_allow_unknown_bounded_goal` | `true` | Разрешить короткий cautious probe через unknown |
@@ -360,7 +372,10 @@ Persistent mission logs пишутся автоматически из `edge_bri
 ```
 
 Timing поля: VLM CSV пишет `latency_ms` и `time_to_first_action_s`; FLAT CSV
-пишет `time_to_detect_s` и `time_to_approach_s`.
+пишет `detector_runtime_mean_s`, `time_to_detect_s` и `time_to_approach_s`.
+Для сравнения latency между режимами используй VLM `latency_ms` и FLAT
+`detector_runtime_mean_s`; `time_to_detect_s` / `time_to_approach_s` включают
+повороты, стабилизацию кадра и ожидание depth-точки.
 
 Ручные loggers:
 

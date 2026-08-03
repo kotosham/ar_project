@@ -33,6 +33,7 @@ from fleet_comms.qos import control_cmd_latched, detection_stream_nodeadline
 
 from search_coordinator import executive_fsm as fsm
 from search_coordinator.executive_fsm import EVENT, STATE
+from search_coordinator.skill_logic import flat_approach_event
 
 
 def _norm_target_text(text):
@@ -115,6 +116,7 @@ class SeekObjectServer:
         node.declare_parameter('flat_initial_scan_left_rad', 3.14)
         node.declare_parameter('flat_initial_scan_frame', 'odom')
         node.declare_parameter('flat_initial_scan_robot_frame', 'base_link')
+        node.declare_parameter('flat_approach_final_distance_m', 0.93)
         self._vlm_handoff_start_timeout_s = float(
             node.get_parameter('vlm_handoff_start_timeout_s').value)
         # 0 means wait until /vlm/activity mission_end, cancel, or supersession.
@@ -125,6 +127,9 @@ class SeekObjectServer:
         self._last_pixel_recv_ns = 0
         self._search_start_ns = 0
         self._flat_scan_done_epoch = None
+        self._flat_target_lock = None
+        self._flat_target_lock_blocked = False
+        self._flat_use_locked_next_approach = False
         self._vlm_events = []
         self._vlm_events_lock = threading.Lock()
 
@@ -326,6 +331,62 @@ class SeekObjectServer:
         }, ensure_ascii=False)
         self._status_pub.publish(msg)
 
+    def _clear_flat_prompt_if_current(self, my_epoch, reason='mission ended'):
+        """Stop the FLAT continuous tracker without clobbering a newer mission."""
+        if self.ms.is_current(my_epoch) and hasattr(self.prompt, 'clear'):
+            self.prompt.clear(reason)
+
+    @staticmethod
+    def _point_is_valid(pt):
+        if pt is None:
+            return False
+        try:
+            return bool(pt.header.frame_id) and math.isfinite(pt.point.x) \
+                and math.isfinite(pt.point.y)
+        except AttributeError:
+            return False
+
+    @staticmethod
+    def _pose_is_valid(ps):
+        if ps is None:
+            return False
+        try:
+            return bool(ps.header.frame_id) and math.isfinite(ps.pose.position.x) \
+                and math.isfinite(ps.pose.position.y)
+        except AttributeError:
+            return False
+
+    def _active_flat_target_lock(self, my_epoch):
+        lock = self._flat_target_lock
+        if not lock or int(lock.get('epoch', -1)) != int(my_epoch):
+            return None
+        if not self._point_is_valid(lock.get('target_point')):
+            return None
+        return lock
+
+    def _remember_flat_target_lock(self, my_epoch, instruction, payload):
+        """Keep driving toward the last confirmed map target if the camera loses it."""
+        target_point = getattr(payload, 'target_point', None)
+        final_goal_pose = getattr(payload, 'final_goal_pose', None)
+        if not self._point_is_valid(target_point) or not self._pose_is_valid(final_goal_pose):
+            return
+        self._flat_target_lock = {
+            'epoch': int(my_epoch),
+            'label': instruction,
+            'target_point': target_point,
+            'final_goal_pose': final_goal_pose,
+            'final_distance_m': float(getattr(payload, 'final_distance_m', 0.0) or 0.0),
+            'bounded_step': bool(getattr(payload, 'bounded_step', False)),
+        }
+        self.node.get_logger().info(
+            'flat_target_lock: remembered "%s" target=(%.2f,%.2f) final_goal=(%.2f,%.2f) '
+            'bounded=%s final_distance=%.2fm'
+            % (instruction,
+               target_point.point.x, target_point.point.y,
+               final_goal_pose.pose.position.x, final_goal_pose.pose.position.y,
+               self._flat_target_lock['bounded_step'],
+               self._flat_target_lock['final_distance_m']))
+
     # -- state handlers -------------------------------------------------------
 
     def _do_flat_initial_scan(self, my_epoch, parent):
@@ -395,9 +456,23 @@ class SeekObjectServer:
         return None
 
     def _do_search(self, my_epoch, parent):
+        self._flat_use_locked_next_approach = False
         ev = self._do_flat_initial_scan(my_epoch, parent)
         if ev is not None:
+            self._flat_target_lock_blocked = False
             return ev
+        if self._fresh_pixel_event() is not None:
+            self._flat_target_lock_blocked = False
+            return EVENT.DETECTED
+        lock = self._active_flat_target_lock(my_epoch)
+        if lock is not None and not self._flat_target_lock_blocked:
+            self._flat_use_locked_next_approach = True
+            self.node.get_logger().info(
+                'flat_target_lock: continuing toward last confirmed "%s" target point '
+                '(final_distance=%.2fm)'
+                % (lock.get('label', self.ms.instruction),
+                   float(lock.get('final_distance_m', 0.0) or 0.0)))
+            return EVENT.DETECTED
 
         goal = ExploreFrontier.Goal()
         goal.request_id = self._new_id()
@@ -424,24 +499,57 @@ class SeekObjectServer:
             return EVENT.NO_FRONTIER
         if payload.outcome == ExploreFrontier.Result.SUCCEEDED:
             # reached a frontier without a detection -> keep exploring
+            self._flat_target_lock_blocked = False
             return 'CONTINUE'
         return 'CONTINUE'  # ABORTED/PREEMPTED frontier drive: try again
 
     def _do_approach(self, my_epoch, parent, instruction):
+        use_locked = bool(self._flat_use_locked_next_approach)
+        lock = self._active_flat_target_lock(my_epoch) if use_locked else None
+        if use_locked and lock is None:
+            use_locked = False
         goal = ApproachDetection.Goal()
         goal.request_id = self._new_id()
         goal.mission_epoch = my_epoch
         goal.target_label = instruction
         goal.approach_offset = 0.0      # server default 0.58
         goal.max_pixel_age_s = self._pixel_fresh_s
-        self.ms.commit(fsm.SKILL_APPROACH, {'label': instruction}, goal.request_id)
+        goal.use_locked_target = use_locked
+        if use_locked:
+            goal.locked_target_point = lock['target_point']
+        self.ms.commit(fsm.SKILL_APPROACH, {
+            'label': instruction,
+            'locked_target': use_locked,
+        }, goal.request_id)
         kind, payload = self._drive_skill(self._approach, goal, my_epoch, parent)
+        self._flat_use_locked_next_approach = False
         if kind == 'aborted':
             return 'ABORTED'
         if kind in ('no_server', 'rejected'):
             return 'FAIL'
-        if payload.outcome == ApproachDetection.Result.SUCCEEDED:
+        if payload.outcome in (
+                ApproachDetection.Result.SUCCEEDED,
+                ApproachDetection.Result.ABORTED):
+            self._remember_flat_target_lock(my_epoch, instruction, payload)
+        threshold = float(self.node.get_parameter(
+            'flat_approach_final_distance_m').value)
+        ev = flat_approach_event(
+            payload.outcome == ApproachDetection.Result.SUCCEEDED,
+            bool(getattr(payload, 'bounded_step', False)),
+            getattr(payload, 'final_distance_m', float('nan')),
+            threshold)
+        if ev == EVENT.REACHED:
             return EVENT.REACHED
+        if (payload.outcome == ApproachDetection.Result.SUCCEEDED
+                and bool(getattr(payload, 'bounded_step', False))):
+            self._flat_target_lock_blocked = False
+            self.node.get_logger().info(
+                'flat approach bounded step reached with %.2fm still expected '
+                'to target (final threshold %.2fm) -> continue mission'
+                % (float(getattr(payload, 'final_distance_m', float('nan'))),
+                   threshold))
+        elif payload.outcome == ApproachDetection.Result.ABORTED:
+            self._flat_target_lock_blocked = True
         # STALE_DETECTION / LOST_TARGET / ABORTED -> back to SEARCH
         return EVENT.LOST
 
@@ -572,71 +680,77 @@ class SeekObjectServer:
         if goal.allow_vlm:
             return self._execute_vlm_handoff(parent, goal, my_epoch)
 
+        self._flat_target_lock = None
+        self._flat_target_lock_blocked = False
+        self._flat_use_locked_next_approach = False
         self.prompt.publish(goal.instruction)
-        state = fsm.next_state(STATE.IDLE, EVENT.START)   # -> SEARCH
-        result = SeekObject.Result()
+        try:
+            state = fsm.next_state(STATE.IDLE, EVENT.START)   # -> SEARCH
+            result = SeekObject.Result()
 
-        while not fsm.is_terminal(state) and rclpy.ok():
-            if parent.is_cancel_requested:
-                self._do_stop(my_epoch, parent, Stop.Goal.SOFT_STOP)
-                self.ms.finish()
-                result.outcome = SeekObject.Result.PREEMPTED
-                result.summary = 'cancelled'
-                self._broadcast_status(STATE.STOP, epoch=my_epoch,
-                                       instruction=goal.instruction, outcome='cancelled')
-                parent.canceled()
-                return result
-            if not self.ms.is_current(my_epoch):
-                # a newer SeekObject goal superseded this mission
-                result.outcome = SeekObject.Result.PREEMPTED
-                result.summary = 'superseded by newer instruction'
-                parent.abort()
-                return result
+            while not fsm.is_terminal(state) and rclpy.ok():
+                if parent.is_cancel_requested:
+                    self._do_stop(my_epoch, parent, Stop.Goal.SOFT_STOP)
+                    self.ms.finish()
+                    result.outcome = SeekObject.Result.PREEMPTED
+                    result.summary = 'cancelled'
+                    self._broadcast_status(STATE.STOP, epoch=my_epoch,
+                                           instruction=goal.instruction, outcome='cancelled')
+                    parent.canceled()
+                    return result
+                if not self.ms.is_current(my_epoch):
+                    # a newer SeekObject goal superseded this mission
+                    result.outcome = SeekObject.Result.PREEMPTED
+                    result.summary = 'superseded by newer instruction'
+                    parent.abort()
+                    return result
 
-            # Report WHICH skill the FSM is driving (ExploreFrontier in SEARCH,
-            # ApproachDetection in APPROACH) so a mission monitor can tell "idle in
-            # SEARCH" from "actively driving" -- active_subtask was always '' before,
-            # making a live run impossible to diagnose.
-            self._publish_feedback(parent, my_epoch, state,
-                                   fsm.select_subgoal(state) or '',
-                                   instruction=goal.instruction)
+                # Report WHICH skill the FSM is driving (ExploreFrontier in SEARCH,
+                # ApproachDetection in APPROACH) so a mission monitor can tell "idle in
+                # SEARCH" from "actively driving" -- active_subtask was always '' before,
+                # making a live run impossible to diagnose.
+                self._publish_feedback(parent, my_epoch, state,
+                                       fsm.select_subgoal(state) or '',
+                                       instruction=goal.instruction)
 
-            if state == STATE.SEARCH:
-                self._search_start_ns = self.node.get_clock().now().nanoseconds
-                ev = self._do_search(my_epoch, parent)
-                if ev == 'CONTINUE':
-                    continue
-                if ev == 'ABORTED':
-                    continue   # let the top-of-loop checks resolve it
-                if ev == 'FAIL':
-                    state = STATE.FAILED
+                if state == STATE.SEARCH:
+                    self._search_start_ns = self.node.get_clock().now().nanoseconds
+                    ev = self._do_search(my_epoch, parent)
+                    if ev == 'CONTINUE':
+                        continue
+                    if ev == 'ABORTED':
+                        continue   # let the top-of-loop checks resolve it
+                    if ev == 'FAIL':
+                        state = STATE.FAILED
+                    else:
+                        state = fsm.next_state(state, ev)
+                elif state == STATE.DETECT:
+                    # transient: the ApproachDetection server does the geometry and
+                    # will classify LOST if it cannot compute a goal.
+                    state = fsm.next_state(state, EVENT.COMPUTABLE)
+                elif state == STATE.APPROACH:
+                    ev = self._do_approach(my_epoch, parent, goal.instruction)
+                    if ev == 'ABORTED':
+                        continue
+                    if ev == 'FAIL':
+                        state = STATE.FAILED
+                    else:
+                        state = fsm.next_state(state, ev)
                 else:
-                    state = fsm.next_state(state, ev)
-            elif state == STATE.DETECT:
-                # transient: the ApproachDetection server does the geometry and
-                # will classify LOST if it cannot compute a goal.
-                state = fsm.next_state(state, EVENT.COMPUTABLE)
-            elif state == STATE.APPROACH:
-                ev = self._do_approach(my_epoch, parent, goal.instruction)
-                if ev == 'ABORTED':
-                    continue
-                if ev == 'FAIL':
-                    state = STATE.FAILED
-                else:
-                    state = fsm.next_state(state, ev)
+                    break
+
+            self.ms.finish()
+            self._publish_feedback(parent, my_epoch, state, instruction=goal.instruction)
+            if state == STATE.DONE:
+                result.outcome = SeekObject.Result.SUCCEEDED
+                result.summary = 'reached target'
+                parent.succeed()
             else:
-                break
-
-        self.ms.finish()
-        self._publish_feedback(parent, my_epoch, state, instruction=goal.instruction)
-        if state == STATE.DONE:
-            result.outcome = SeekObject.Result.SUCCEEDED
-            result.summary = 'reached target'
-            parent.succeed()
-        else:
-            result.outcome = SeekObject.Result.ABORTED
-            result.summary = 'frontiers exhausted' if state == STATE.FAILED else 'ended'
-            parent.abort()
-        self._broadcast_status(state, epoch=my_epoch, instruction=goal.instruction,
-                               outcome=result.summary)
-        return result
+                result.outcome = SeekObject.Result.ABORTED
+                result.summary = 'frontiers exhausted' if state == STATE.FAILED else 'ended'
+                parent.abort()
+            self._broadcast_status(state, epoch=my_epoch, instruction=goal.instruction,
+                                   outcome=result.summary)
+            return result
+        finally:
+            self._clear_flat_prompt_if_current(my_epoch)

@@ -67,3 +67,11 @@ class PromptBridge:
         self._pub.publish(String(data=label))
         self._last = label
         self._node.get_logger().info("prompt_bridge -> '%s' on %s" % (label, self._topic))
+
+    def clear(self, reason: str = '') -> None:
+        """Latch an empty prompt so the continuous tracker stops after a mission."""
+        self._pub.publish(String(data=''))
+        self._last = ''
+        suffix = ' (%s)' % reason if reason else ''
+        self._node.get_logger().info(
+            "prompt_bridge -> <clear> on %s%s" % (self._topic, suffix))
