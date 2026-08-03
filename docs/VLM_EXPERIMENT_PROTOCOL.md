@@ -77,6 +77,7 @@ VLM  = mean positive VLM planning latency from orchestrator step_result.latency_
 | 2 | Visible / unmapped | office chair | Стул виден в стартовом кадре, но цель находится вне/на границе текущей карты. |
 | 3 | Scan reveal | office chair | Стул не виден впереди, но появляется после простого поворота. |
 | 4 | Corridor search | office chair | Стул не виден initial scan-ом; нужно исследовать левый коридор. |
+| 5 | Semantic prompt | office chair / drawer cabinet | Цель задана загадкой, без прямого имени объекта. |
 
 ## Experiment Notes
 
@@ -105,6 +106,18 @@ Scene 4 проверяет главный случай semantic exploration. VLM
 осмысленным выбором левого коридора. Прогоны 2, 3 и 4 FLAT были размечены как
 negative success: робот останавливался у стенки/мебели после ложноположительных
 или одиночных подозрительных target detections.
+
+Scene 5 проверяет семантически сложный запрос: цель задается загадкой, а не
+прямым именем класса. VLM использует resolver: переводит описание в
+детекторный запрос с несколькими zero-shot формулировками и затем ведет робота
+к найденной цели; все пять VLM-прогонов размечены как `success=1`,
+`progress=1`. Для FLAT это принципиально слабый случай: режим не имеет
+resolver-а и отправляет текст запроса в детектор как есть. В первых трех
+FLAT-прогонах FSM дошел до `DONE`, но это не засчитано как успех: `DONE` возник
+из-за шума/ложных target detections, которые детектор принял за подходящие цели.
+В прогонах 4-5 робот ушел в случайное frontier-блуждание без нахождения цели.
+Для метрик все пять FLAT-прогонов scene 5 размечены вручную как `success=0`,
+`progress=0.25`.
 
 ## Manual Progress Rules Used
 
@@ -136,6 +149,20 @@ success  = [1, 0, 1, 1, 1]
 progress = [1.00, 0.75, 1.00, 1.00, 1.00]
 ```
 
+Scene 5 FLAT:
+
+```text
+success  = [0, 0, 0, 0, 0]
+progress = [0.25, 0.25, 0.25, 0.25, 0.25]
+```
+
+Scene 5 VLM:
+
+```text
+success  = [1, 1, 1, 1, 1]
+progress = [1.00, 1.00, 1.00, 1.00, 1.00]
+```
+
 ## Final Metrics Table
 
 | Scene | Setup | FLAT Success | FLAT Progress | FLAT D/P time (s) | VLM Success | VLM Progress | VLM D/P time (s) |
@@ -144,6 +171,7 @@ progress = [1.00, 0.75, 1.00, 1.00, 1.00]
 | 2 | Visible / unmapped | 0.20 | 0.60 | 0.38 | 1.00 | 1.00 | 1.14 |
 | 3 | Scan reveal | 1.00 | 0.90 | 0.22 | 1.00 | 1.00 | 1.16 |
 | 4 | Corridor search | 0.40 | 0.45 | 0.085 | 0.80 | 0.95 | 2.03 |
+| 5 | Semantic prompt | 0.00 | 0.25 | 0.07 | 1.00 | 1.00 | 1.35 |
 
 ## Interpretation
 
