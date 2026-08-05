@@ -1,177 +1,184 @@
-# Phase 2 — ZERO-VLM FLAT baseline: план реализации
+# Phase 2 - ZERO-VLM FLAT Baseline Implementation Plan
 
-Гейт фазы 2. Получен из планировочного workflow (architect + adversarial
-critic). Критик вернул вердикт **needs_revision**; перечисленные ниже
-обязательные правки (must-fix) учтены в этом плане, поэтому источником истины
-является именно этот документ, а не исходный план.
+This document is the Phase 2 gate. It comes from the planning workflow
+(architect + adversarial critic). The critic returned `needs_revision`; the
+must-fix items below are already incorporated, so this document is the source of
+truth rather than the original plan.
 
-## Архитектура
+## Architecture
 
-Вся executive-логика живёт в одном rclpy-узле, **`search_coordinator`** (ar_project),
-на `MultiThreadedExecutor` с раздельными `ReentrantCallbackGroup` (тик FSM,
-каждый skill-сервер, подписки), чтобы внутрипроцессный loopback (FSM является
-клиентом своих собственных skill-серверов) не приводил к взаимоблокировке.
-**Ни один колбэк не должен блокироваться** — циклы движения и «ожидание нулевой
-скорости» опрашиваются через таймер/асинхронно. **`map_odom_relay`** — отдельный
-узел в том же пакете. Executive **никогда не публикует `cmd_vel`** — всё движение
-проходит по цепочке Nav2 → `/cmd_vel_nav` → velocity_smoother → `/cmd_vel` →
-watchdog → twist_mux → collision_monitor (цепочка безопасности не тронута).
+All executive logic lives in one rclpy node, **`search_coordinator`**
+(`ar_project`), running on `MultiThreadedExecutor` with separate
+`ReentrantCallbackGroup`s for the FSM tick, each skill server, and subscriptions.
+This prevents in-process loopback action calls (FSM as a client of its own skill
+servers) from deadlocking.
 
-- ENTRY: action-сервер `SeekObject` (object_tracking_msgs) — единственная точка
-  входа в миссию; владеет mission_state, mission_epoch, FSM.
-- SKILL-серверы (все в search_coordinator, ar_project_msgs): `ExploreFrontier`,
-  `GoToPose`, `ApproachDetection`, `GetObservation`, `Stop`. FSM управляет ими
-  через loopback action-клиентов (поэтому каждый тестируется через
-  `ros2 action send_goal`).
-- `GoToPose`/`ExploreFrontier`/`ApproachDetection` управляют движением через Nav2
-  `navigate_to_pose`. Переиспользуют QoS `fleet_comms` + Heartbeat (фаза 1.3).
+No callback may block. Motion loops and zero-velocity waits are polled through
+timers/asynchronous checks. `map_odom_relay` is a separate node in the same
+package. The executive never publishes `cmd_vel`; all motion goes through:
 
-## Состояния FSM (общая константа `executive_fsm.STATE`)
+```text
+Nav2 -> /cmd_vel_nav -> velocity_smoother -> /cmd_vel -> watchdog
+-> twist_mux -> collision_monitor -> downstream controller
+```
 
-`IDLE, SEARCH, DETECT, APPROACH, STOP, DEGRADED, DONE, FAILED` (DRIVE свёрнут в
-skills; REPLAN зарезервирован для фазы 4 и в FLAT никогда не достигается).
-Публикуется дословно в `SeekObject` feedback.state.
+- ENTRY: `SeekObject` action server from `object_tracking_msgs`; the only mission
+  entry point and owner of mission state, mission epoch, and FSM.
+- SKILLS: `ExploreFrontier`, `GoToPose`, `ApproachDetection`, `GetObservation`,
+  and `Stop` from `ar_project_msgs`. The FSM controls them through loopback
+  action clients, so each can be tested with `ros2 action send_goal`.
+- Motion skills use Nav2 `navigate_to_pose` and reuse `fleet_comms` QoS plus
+  Heartbeat from Phase 1.3.
 
-**Инварианты:** (1) committed-subgoal — ровно одна зафиксированная подцель
-`{skill,args,step_id-UUID,epoch}` пока активна цель SeekObject, принимается только
-в commit-точке; (2) default-productive-action — `_select_subgoal()` никогда не
-возвращает None пока миссия активна; по умолчанию = EXPLORE_FRONTIER, с откатом
-к STOP(HOLD) + завершению только когда frontier-ы исчерпаны. Никогда не крутиться
-вхолостую, никогда не выдавать реактивный cmd_vel.
+## FSM States
 
-Проход: IDLE →(goal)→ SEARCH →(свежий target pixel)→ DETECT →(вычислима 3D-цель)→
-APPROACH →(достигнута и свежая)→ DONE. APPROACH STALE_DETECTION/LOST_TARGET →
-SEARCH (никогда ложно не «достигнуто»). ExploreFrontier NO_FRONTIER → FAILED.
-Новая инструкция → STOP → сброс (epoch++).
+Shared constant: `executive_fsm.STATE`
 
-## Контракты skill-серверов
+```text
+IDLE, SEARCH, DETECT, APPROACH, STOP, DEGRADED, DONE, FAILED
+```
 
-- **ExploreFrontier** — разрешает `frontier_id` (-1 ⇒ лучший после гистерезиса;
-  ≥0 ⇒ стабильный id) → PoseStamped → Nav2. Feedback: distance_remaining,
-  selected_frontier_id, frontier_score. NO_FRONTIER если список пуст. Соблюдает
-  max_travel_m.
-- **GoToPose** — пробрасывает target_pose + допуски в Nav2; маппит результат.
-- **ApproachDetection** (FMEA) — подписан на `/target_pixel`; контролирует возраст
-  пикселя относительно `max_pixel_age_s` (1.5). SUCCEEDED **только** когда Nav2
-  достиг поставленной мной позы **И** последний пиксель был свежим. Никогда не
-  «достигнуто» при `detection_fresh==false`. STALE_DETECTION (пиксели приходят,
-  но все устаревшие) / LOST_TARGET (пикселей нет) прерывают вместо движения или
-  ложного успеха. Без защёлки goal_locked.
-- **GetObservation** — функциональная заглушка фазы 2: захватывает один
-  CompressedImage если есть реальный источник (иначе оставляет `view` пустым —
-  см. must-fix #3), `candidates` пуст (детектор — это фаза 3).
-- **Stop** — идемпотентен. SOFT_STOP: отменяет Nav2; остановка обеспечивается
-  обнулением velocity_smoother по input-timeout + watchdog (НЕ рампа торможения —
-  см. must-fix #4). HOLD: отмена + защёлка. QUICK_STOP_REQUEST: дополнительно
-  срабатывает внешний аппаратный quick-stop-триггер (закрывает ROADMAP 0.7),
-  исполняется независимо от epoch. `zero_velocity_confirmed` как только скорость
-  по `/odometry/filtered` < eps. Строжайшая идемпотентность: повторная отправка
-  того же request_id = no-op (кэшированный терминальный результат).
+`DRIVE` is folded into skills. `REPLAN` is reserved for Phase 4 and is never
+reached in FLAT. The value is published verbatim in `SeekObject` feedback.
 
-## Идемпотентность по mission-epoch + UUID (FMEA 2.5)
+Invariants:
 
-SeekObject — это authority по epoch. Новая инструкция → ABORT-AND-RESET: отменить
-все skill- и Nav2-цели в полёте, `mission_epoch++` (uint32, безопасно к
-переполнению), очистить committed-подцель + состояние commit frontier-а + таблицы
-дедупликации, переввести в SEARCH; старый handle SeekObject финализируется как
-PREEMPTED. Каждая отправленная skill-цель помечается текущим epoch + свежим UUID
-step_id. Серверы выполняют epoch-gate на приёмке (отклоняют несовпадающие =
-зомби). Результаты фильтруются путём пометки каждого ожидающего handle его
-dispatch-epoch. Словарь дедупликации `{request_id: handle/result}` на сервер;
-повторный request_id в том же epoch = no-op.
+1. A committed subgoal is exactly one `{skill,args,step_id,epoch}` while a
+   SeekObject goal is active. It is accepted only at a commit point.
+2. `_select_subgoal()` never returns `None` while a mission is active. The default
+   productive action is `EXPLORE_FRONTIER`, falling back to `STOP(HOLD)` and
+   mission completion only when frontiers are exhausted.
+3. Never spin idly and never emit reactive `cmd_vel`.
 
-## Frontier-экстрактор (FMEA 2.3) — ИСПРАВЛЕННЫЙ ИСТОЧНИК
+Nominal flow:
 
-**Решение об источнике (must-fix #1):** НЕ `/local_costmap/costmap_raw`
-(скользящий 3×3, без `track_unknown_space` → нет UNKNOWN-ячеек → ноль frontier-ов).
-Использовать **SLAM occupancy grid** (RTAB-Map `/map`, `nav_msgs/OccupancyGrid`,
-фрейм `map`, -1=unknown / 0=free / 100=occupied) — стандартный источник для
-explore-lite. **Должно быть эмпирически проверено** в sim до начала сборки:
-подтвердить, что `/map` публикуется с unknown-ячейками; если RTAB-Map не выдаёт
-grid в `launch_sim`, включить его. Цели ExploreFrontier тогда задаются во фрейме
-`map` (Nav2 global_frame=map). Frontier = свободная ячейка с unknown-соседом по
-4-связности; кластер (≥ `min_frontier_cells`); оценка =
-`w_size*size − w_dist*dist − w_turn*heading_change`; стабильные id через
-квантование центроида; top-K в памяти + `/frontiers/markers` для RViz.
+```text
+IDLE -> SEARCH -> DETECT -> APPROACH -> DONE
+```
 
-**Гистерезис:** не переключаться с зафиксированного frontier-а, пока конкурент не
-превзойдёт его на `switch_margin` (15%) И он не был зафиксирован ≥ `min_dwell_s`
-(4 с); обходится только когда зафиксированный frontier исчезает (прогресс, а не
-осцилляция). Параметры объявлены на узле. Нужен мир с двумя почти равными
-frontier-ами (must-fix #10).
+`APPROACH` with `STALE_DETECTION`/`LOST_TARGET` returns to SEARCH and must never
+produce false success. `ExploreFrontier` with `NO_FRONTIER` fails. A new
+instruction triggers STOP, reset, and epoch increment.
 
-## Detect-путь FLAT — ИСПРАВЛЕНО (must-fix #2/#3)
+## Skill Server Contracts
 
-`/target_pixel` начинает течь только после того, как метка достигает
-`/target_prompt`, а `reliable_prompt_sender` удаляется (2.9). Поэтому: **FSM
-публикует `SeekObject.instruction` → `/target_prompt`** (небольшой мост внутри
-executive), чтобы существующий трекер отслеживал запрошенный объект.
-**Исправление QoS:** подписка-потребитель на `/target_pixel` НЕ должна запрашивать
-deadline, который издатель с BEST_EFFORT/без deadline не может предложить (иначе
-получится Request-vs-Offered несовместимость → тихие нулевые сэмплы). Либо добавить
-вариант `detection_stream_nodeadline()`, либо добавить соответствующий offered
-deadline на издателе трекера; добавить unit-тест `is_compatible` именно для этой
-пары.
+- **ExploreFrontier**: resolves `frontier_id` (`-1` means best local frontier),
+  computes PoseStamped, and drives through Nav2. It reports distance remaining,
+  selected frontier, and score. Empty list returns `NO_FRONTIER`.
+- **GoToPose**: forwards target pose and tolerances to Nav2 and maps the result.
+- **ApproachDetection**: subscribes to `/target_pixel`, checks pixel age against
+  `max_pixel_age_s` (1.5 by default), and returns `SUCCEEDED` only when Nav2
+  reached the requested pose and the last detection was fresh or safely handled
+  by target-lock close-range logic. It never reports reached when
+  `detection_fresh==false`.
+- **GetObservation**: Phase 2 functional stub. It captures one CompressedImage
+  when a real source is present; otherwise `view` is empty. Candidates are empty
+  until Phase 3 detector integration.
+- **Stop**: idempotent. `SOFT_STOP` cancels Nav2 and relies on velocity smoother
+  input timeout + watchdog; `HOLD` cancels and latches; `QUICK_STOP_REQUEST`
+  triggers hardware quick-stop independently from epoch. Repeating the same
+  request ID is a no-op with cached terminal result.
 
-## map_odom_relay (2.6)
+## Mission Epoch + UUID Idempotency
 
-`search_coordinator/map_odom_relay.py`. Подписаться на `/map_odom_correction`
-(QoS `correction_lowrate`); транслировать map→odom в /tf на ~10 Гц (< 0.2 с
-transform_tolerance), удерживая последнее корректное значение (identity до первой
-коррекции). Гейты: stale-by-seq, stale-by-stamp (`max_correction_age_s` 1.0),
-covariance/fitness, скачок (`max_jump_m`/`max_jump_rad`; принимать только если
-`relocalized==true`). **must-fix #7:** параметризовать RTAB-Map `publish_tf_map`
-(жёстко прошитый `'true'` в `rtabmap_rgbd_launch.py:278`) в LaunchConfiguration,
-выставлять `false` когда работает relay (без дублирующего broadcaster-а).
+`SeekObject` is the epoch authority. A new instruction performs ABORT-AND-RESET:
+cancel all active skill and Nav2 goals, increment `mission_epoch`, clear the
+committed subgoal, frontier commit state, and dedup tables, then re-enter SEARCH.
+The old SeekObject handle finalizes as `PREEMPTED`.
 
-## Облегчение Nav2 (2.7)
+Every skill goal carries the current epoch and a fresh UUID `step_id`. Servers
+gate by epoch and reject zombie goals. Result handlers also filter by dispatch
+epoch. Each server keeps `{request_id: handle/result}` deduplication.
 
-`controller_frequency` 15→10; `expected_planner_frequency` 20→1; убрать
-`smoother_server`+`waypoint_follower` (params + lifecycle_nodes + Nodes); урезать
-behavior_plugins до spin/backup/wait; удалить мёртвый блок local static_layer.
-Оставить NavFn(use_astar:false) + DWB, local costmap в odom, источник препятствий
-`/scan`. НЕ прошивать жёстко use_sim_time (RewrittenYaml всё равно переписывает).
-**must-fix #12:** перед удалением `map_server` подтвердить, что питает
-static_layer `global_costmap` (RTAB-Map `/map`?), чтобы глобальный costmap
-по-прежнему автозапускался.
+## Frontier Extractor
 
-## Удаления (2.9)
+Correct source: use the **SLAM occupancy grid** (`/map`, `nav_msgs/OccupancyGrid`,
+frame `map`, -1 unknown / 0 free / 100 occupied), not rolling local costmap. The
+local costmap can lack unknown cells and therefore produce zero frontiers.
 
-`reliable_prompt_sender.py` + его launch + запись install в CMakeLists; «суп»
-target_pixel_to_goal (goal_locked, lock_goal_on_publish, final_approach_freeze,
-nav_status_callback, prompt_ack, топик goal_locked), оставив только геометрию
-(перенесена в `approach_geometry.py` в 2.8); реактивный cmd_vel в tracker_node +
-конечный автомат target_found/reached. **must-fix #6:** также обработать осиротевших
-потребителей (`home_pose_manager.py`, `experiment_metrics_logger.py` подписаны на
-`/goal_pose`, `/target_prompt`) и launch-файлы, ссылающиеся на выпотрошенные
-скрипты.
+Frontier definition: free cell with a 4-connected unknown neighbor. Clusters are
+8-connected and filtered by `min_frontier_cells`. Score:
 
-## Исправленный порядок задач
+```text
+w_size * size - w_dist * distance - w_turn * heading_change
+```
 
-1. **T2.8** геометрия → `approach_geometry.py` (чистая, pytest). *нет зависимостей*
-2. **T2.6** map_odom_relay + параметр RTAB-Map publish_tf_map (mock-проверка).
-   *нет зависимостей*
-3. **T2.7** облегчение Nav2 (+ проверить источник global_costmap).
-   *нет зависимостей*
-4. **Спайк по источнику frontier-ов** — эмпирически подтвердить, что `/map` (или
-   выбранный grid) выдаёт unknown-ячейки в sim; затем **T2.3** frontier-экстрактор
-   + мир для осцилляции.
-5. **Prompt-мост + исправление QoS `/target_pixel`** (+ тест is_compatible).
-6. **T2.4** skill-серверы — включить сюда authority по epoch `mission_state.py` +
-   getter (разрешает цикличность T2.4↔T2.5; собирается с реальной epoch-инфраструктурой).
-7. **T2.5** полное поведение mission-epoch + фильтрация по epoch в HeartbeatMonitor
-   (`set_mission_epoch` + проверка epoch в `_on_msg` — новая работа, must-fix #8).
-8. **T2.2** executive FSM + сервер SeekObject.
-9. **T2.9** удаления (после переноса геометрии + запуска FSM в живую).
-10. **T2.10** сквозной FLAT-сценарий + замер Pi-профиля → зафиксировать baseline.
+Stable IDs are derived from quantized centroids. Top-K frontiers and RViz markers
+are published.
 
-## Ключевые риски (от критика)
+Hysteresis:
 
-- Источник frontier-ов должен быть эмпирически доказан до T2.3 (иначе SEARCH
-  заходит в тупик).
-- QoS `/target_pixel` + prompt-мост должны быть готовы до того, как любой APPROACH
-  сможет завершиться успешно.
-- Loopback action-серверы: раздельные callback-группы, никогда не блокироваться
-  в колбэке.
-- Pi-профилирование под WSL — это эмуляция через taskset/cpulimit → только
-  относительный гейт; перемерить на железе в фазе 6.3.
+- Do not switch from the committed frontier until a competitor beats it by
+  `switch_margin` (15%) and the current choice has been held for at least
+  `min_dwell_s` (4 s).
+- Override only when the committed frontier disappears.
+
+## FLAT Detect Path
+
+`/target_pixel` flows only after the target prompt reaches the detector/tracker.
+The executive publishes `SeekObject.instruction` to `/target_prompt` through a
+small internal bridge.
+
+QoS must be compatible: the `/target_pixel` consumer must not request a deadline
+that a BEST_EFFORT publisher does not offer. Use `detection_stream_nodeadline()`
+or add a matching offered deadline on the publisher. Keep a unit test around
+`is_compatible()` for this pair.
+
+## `map_odom_relay`
+
+`search_coordinator/map_odom_relay.py` subscribes to `/map_odom_correction` with
+`correction_lowrate` QoS and broadcasts `map->odom` into `/tf` at about 10 Hz,
+within the 0.2 s transform tolerance. It holds the last valid correction, uses
+identity before the first correction, and gates by:
+
+- stale sequence
+- stale stamp (`max_correction_age_s`)
+- covariance/fitness
+- jump (`max_jump_m`, `max_jump_rad`), accepted only when `relocalized==true`
+
+RTAB-Map `publish_tf_map` must be parameterized and set to `false` when relay is
+running to avoid duplicate broadcasters.
+
+## Nav2 Lightening
+
+- `controller_frequency`: 15 -> 10
+- `expected_planner_frequency`: 20 -> 1
+- remove `smoother_server` and `waypoint_follower` where not needed
+- reduce behavior plugins to spin/backup/wait
+- keep NavFn (`use_astar:false`) + DWB
+- keep local costmap in `odom`
+- use `/scan` as obstacle source
+- do not hardcode `use_sim_time`
+
+Before removing `map_server`, confirm what feeds `global_costmap` static layer.
+
+## Deletions
+
+Remove:
+
+- `reliable_prompt_sender.py` and its launch/install entry
+- old `target_pixel_to_goal` state soup (`goal_locked`, prompt ack, nav_status
+  auto-success, etc.) after geometry is moved to `approach_geometry.py`
+- reactive `cmd_vel` in tracker nodes
+- dead launch references to deleted scripts
+
+## Corrected Task Order
+
+1. **T2.8** Geometry -> `approach_geometry.py` with pure pytest coverage.
+2. **T2.6** `map_odom_relay` + RTAB-Map `publish_tf_map` parameter.
+3. **T2.7** Nav2 lightening and global costmap source check.
+4. **Frontier source spike**: empirically confirm `/map` unknown cells in sim.
+5. **Prompt bridge + `/target_pixel` QoS fix**.
+6. **T2.4** Skill servers with epoch authority support.
+7. **T2.5** Full mission epoch behavior and HeartbeatMonitor epoch filtering.
+8. **T2.2** Executive FSM + SeekObject server.
+9. **T2.9** Deletions.
+10. **T2.10** End-to-end FLAT scenario + Pi-class profiling baseline.
+
+## Key Risks
+
+- Frontier source must be empirically proven before T2.3.
+- `/target_pixel` QoS and prompt bridge must work before any APPROACH can finish.
+- Loopback action servers need separate callback groups and non-blocking
+  callbacks.
+- WSL Pi profiling is only a relative gate; remeasure on hardware in Phase 6.3.

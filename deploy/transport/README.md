@@ -1,25 +1,25 @@
-# Развёртывание транспорта — ROADMAP Phase 1.1
+# Transport Deployment - ROADMAP Phase 1.1
 
-Единственный роутер `rmw_zenoh` на edge-узле, multicast **выключен**, сокетные
-буферы по 12 МБ на каждом хосте, с резервным вариантом на Fast DDS (LARGE_DATA +
-Discovery Server). Это межхостовая транспортная подложка для канала Pi↔edge; она
-заменяет стандартное обнаружение DDS через multicast, которое перегружает общую
-сеть Wi-Fi и плохо работает между подсетями.
+A single `rmw_zenoh` router runs on the edge host, multicast is **disabled**,
+each host gets 12 MB socket buffers, and Fast DDS (LARGE_DATA + Discovery Server)
+is kept as a fallback. This is the inter-host transport layer for the Pi-edge
+link; it replaces standard DDS multicast discovery, which overloads shared Wi-Fi
+and behaves poorly across subnets.
 
-## Что куда устанавливается
+## Installation Targets
 
-| Артефакт | Edge-хост | Pi (и любой хост с узлами) |
+| Artifact | Edge host | Pi and any host running nodes |
 |---|---|---|
-| `zenoh_router_config.json5` | ✅ `/etc/zenoh/` | — |
-| `rmw-zenoh-router.service` | ✅ включить | — |
-| `zenoh_session_config.json5` | ✅ `/etc/zenoh/` | ✅ `/etc/zenoh/` |
-| `transport_env.sh` | ✅ source | ✅ source |
-| `99-ros2-socket-buffers.conf` | ✅ `/etc/sysctl.d/` | ✅ `/etc/sysctl.d/` |
-| `fastdds-discovery-server.service` | только для fallback | — |
+| `zenoh_router_config.json5` | yes, `/etc/zenoh/` | - |
+| `rmw-zenoh-router.service` | yes, enable it | - |
+| `zenoh_session_config.json5` | yes, `/etc/zenoh/` | yes, `/etc/zenoh/` |
+| `transport_env.sh` | source it | source it |
+| `99-ros2-socket-buffers.conf` | yes, `/etc/sysctl.d/` | yes, `/etc/sysctl.d/` |
+| `fastdds-discovery-server.service` | fallback only | - |
 
-Все ROS-узлы (включая роутер) должны использовать **одну и ту же** `RMW_IMPLEMENTATION`.
+All ROS nodes, including the router, must use the **same** `RMW_IMPLEMENTATION`.
 
-## Запуск (основной вариант: zenoh)
+## Startup (Primary Path: zenoh)
 
 ```bash
 # every host: OS socket buffers
@@ -38,28 +38,29 @@ source ~/ros2_ws/install/setup.bash
 source <repo>/deploy/transport/transport_env.sh
 ```
 
-## Резервный вариант (Fast DDS)
+## Fallback Path (Fast DDS)
 
-Если `rmw_zenoh` недоступен, переключите каждый хост на блок Fast DDS в файле
+If `rmw_zenoh` is unavailable, switch every host to the Fast DDS block in
 `transport_env.sh` (`rmw_fastrtps_cpp` + `FASTDDS_BUILTIN_TRANSPORTS=LARGE_DATA`
-+ `ROS_DISCOVERY_SERVER`) и запустите `fastdds-discovery-server.service` на edge-узле.
++ `ROS_DISCOVERY_SERVER`) and start `fastdds-discovery-server.service` on the
+edge host.
 
-## Дымовой тест (один хост)
+## Smoke Test (Single Host)
 
-`smoke_test_zenoh.sh` запускает роутер с этой конфигурацией, затем publisher и
-subscriber как две отдельные сессии (multicast выключен, подключение к
-локальному роутеру) и подтверждает, что сообщения проходят **через роутер** —
-то есть обнаружение работает без multicast. Запускайте его в WSL:
+`smoke_test_zenoh.sh` starts the router with this configuration, then runs a
+publisher and subscriber as two separate sessions (multicast disabled, both
+connected to the local router). It confirms that messages pass **through the
+router**, meaning discovery works without multicast. Run it in WSL:
 
 ```bash
 bash deploy/transport/smoke_test_zenoh.sh
 ```
 
-## Проверено и в ожидании
+## Verified and Pending
 
-- **Проверено (один хост, WSL):** конфигурации загружаются; роутер стартует; при
-  выключенном multicast + gossip доставка pub→sub работает только через роутер.
-  Схема соответствует стандартным значениям установленного `rmw_zenoh_cpp`.
-- **В ожидании (нужны 2 хоста — Pi + edge, ROADMAP Phase 1.2 / 6):** измеренный
-  межхостовой джиттер в пределах бюджетов 0.2 s (TF) / 0.35 s (depth-match) /
-  1.5 s (pixel-age); для этого требуются `chrony` (Phase 1.2) и реальный Wi-Fi.
+- **Verified (single host, WSL):** configs load, the router starts, and with
+  multicast + gossip disabled pub/sub delivery works only through the router.
+  The setup matches the installed `rmw_zenoh_cpp` defaults.
+- **Pending (requires two hosts: Pi + edge, ROADMAP Phase 1.2 / 6):** measured
+  inter-host jitter within the 0.2 s (TF), 0.35 s (depth-match), and 1.5 s
+  (pixel-age) budgets. This requires `chrony` (Phase 1.2) and real Wi-Fi.

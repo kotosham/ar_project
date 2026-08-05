@@ -1,8 +1,8 @@
-# Автоматическое поднятие стека на ПК. Профили выбирают, что именно поднять:
-#   docker compose --profile sim  up   # весь FLAT в симуляции (один контейнер, CPU)
-#   docker compose --profile edge up   # детектор (GPU) + VLM-оркестратор
-#   docker compose --profile all  up   # всё сразу (тяжело по RAM, см. README)
-# Контекст сборки — родитель ar_project (чтобы видеть оба репозитория).
+# Automatic PC stack bringup. Profiles select which part of the stack to run:
+#   docker compose --profile sim  up   # full FLAT simulation, one CPU container
+#   docker compose --profile edge up   # detector (GPU) + VLM orchestrator
+#   docker compose --profile all  up   # everything at once, RAM-heavy; see README
+# Build context is the parent of ar_project so both repositories are visible.
 name: mrn
 
 x-ros-env: &ros-env
@@ -10,8 +10,8 @@ x-ros-env: &ros-env
   RMW_IMPLEMENTATION: ${RMW_IMPLEMENTATION:-rmw_fastrtps_cpp}
 
 services:
-  # Весь FLAT-стек в симуляции (Gazebo + RTAB-Map + Nav2 + executive) одним контейнером.
-  # flat_sim_bringup уже запускает gui:=false (headless) — дисплей не нужен.
+  # Full FLAT simulation stack (Gazebo + RTAB-Map + Nav2 + executive) in one container.
+  # flat_sim_bringup already starts gui:=false (headless), so no display is required.
   sim:
     build:
       context: ../..
@@ -24,7 +24,7 @@ services:
     stop_grace_period: 15s
     profiles: ["sim", "all"]
 
-  # Детектор YOLOE (edge, GPU). Веса монтируются томом в share-путь пакета.
+  # YOLOE detector (edge, GPU). Weights are mounted into the package share path.
   detector:
     build:
       context: ../..
@@ -49,9 +49,9 @@ services:
               capabilities: [gpu]
     profiles: ["edge", "all"]
 
-  # VLM-оркестратор (edge). Креды VLM берутся из vlm.env (его содержимое не читается
-  # инструментами — только подключается как env_file). required:false — без него
-  # оркестратор стартует в mock-режиме.
+  # VLM orchestrator (edge). VLM credentials come from vlm.env. The file content
+  # is not read by tools here; it is only connected as env_file. With
+  # required:false, the orchestrator starts in mock mode when the file is absent.
   orchestrator:
     image: mrn/edge:${ROS_DISTRO:-jazzy}
     build:

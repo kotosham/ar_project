@@ -1,76 +1,118 @@
-# Робастная архитектура (ветки `robust`) — обзор
+# Robust Architecture Overview (`robust` branches)
 
-Этот каталог — единый источник правды по новой архитектуре взаимодействия **робота (Raspberry Pi 5 / 4 GB)** и **ПК/edge (GPU)**. Цель переписывания: робастность и скорость, работа практически в реальном времени, готовность к отказам сети/узлов, и два режима работы — `flat` и `vlm`. Модели и логика прошлой реализации переиспользуются (сегментация, `target_pixel_to_goal`, Nav2, EKF, EPOS4/CAN, RealSense), но в новой архитектуре.
+This directory is the single source of truth for the architecture connecting the
+**robot (Raspberry Pi 5 / 4 GB)** and the **PC/edge host (GPU)**. The rewrite is
+focused on robustness, near-real-time operation, graceful degradation during
+network/node failures, and two operating modes: `flat` and `vlm`. The previous
+implementation's models and logic are reused where useful (segmentation,
+`target_pixel_to_goal`, Nav2, EKF, EPOS4/CAN, RealSense), but integrated into a
+new architecture.
 
-> Архитектура утверждена по итогам двух проходов проектирования + FMEA (см. историю обсуждения). Эти документы её **реализуют**, а не пересматривают. Сначала — документация, затем реализация по [ROADMAP](../ROADMAP.md). Тестируем сначала в Gazebo на WSL2 Ubuntu, потом на железе.
+> The architecture was accepted after two design passes and FMEA review. These
+> documents implement that decision rather than reopening it. Documentation
+> comes first, then implementation according to [ROADMAP](../ROADMAP.md). Testing
+> starts in Gazebo on WSL2 Ubuntu and then moves to hardware.
 
-## Документы
+## Documents
 
-| Файл | О чём |
+| File | Topic |
 |---|---|
-| [DATA_CONTRACTS.md](DATA_CONTRACTS.md) | Контракт на **каждом** канале передачи Pi↔ПК: что/как/формат/QoS/размер/полоса/задержка/сложность, что остаётся локальным |
-| [MODES.md](MODES.md) | Режимы `flat` и `vlm`: FSM, словарь skill-ов, тайминг реплана (lead-time / commit-point), notes-буфер суммаризации, деградация |
-| [REPOS_INTERFACES.md](REPOS_INTERFACES.md) | Раскладка пакетов на `robust`, инвентарь `.action`/`.msg`/`.srv`, что REUSED/NEW/DELETED, оценки сложности/времени |
-| [GAZEBO_WSL_TESTING.md](GAZEBO_WSL_TESTING.md) | План тестирования в Gazebo на WSL2: сим сенсоров, mock EPOS4/CAN, эмуляция Pi↔ПК-разрыва, CUDA-on-WSL2, матрица FMEA→sim |
-| [../ROADMAP.md](../ROADMAP.md) | Пошаговый чек-лист реализации (FIX-FIRST), с отметками `- [ ]` |
+| [DATA_CONTRACTS.md](DATA_CONTRACTS.md) | Contract for every Pi-PC channel: payload, format, QoS, size, bandwidth, latency, complexity, and what stays local. |
+| [MODES.md](MODES.md) | `flat` and `vlm` modes: FSM, skill dictionary, replan timing, lead-time/commit-point, notes buffer, and degradation. |
+| [REPOS_INTERFACES.md](REPOS_INTERFACES.md) | Package layout on `robust`, `.action`/`.msg`/`.srv` inventory, REUSED/NEW/DELETED status, complexity and time estimates. |
+| [GAZEBO_WSL_TESTING.md](GAZEBO_WSL_TESTING.md) | Gazebo-on-WSL2 test plan: simulated sensors, mock EPOS4/CAN, Pi-PC split emulation, CUDA on WSL2, and FMEA-to-simulation matrix. |
+| [../ROADMAP.md](../ROADMAP.md) | Step-by-step implementation checklist with `- [ ]` items. |
 
-Каждый из `DATA_CONTRACTS.md` и `GAZEBO_WSL_TESTING.md` открывается блоком **«Поправки верификации»** — это уточнённые по итогам состязательной проверки факты/числа, имеющие **приоритет** над телом документа.
+`DATA_CONTRACTS.md` and `GAZEBO_WSL_TESTING.md` both start with a verification
+corrections block. Those corrections have priority over the body of the
+document.
 
-## Ключевая идея: 3-уровневая (3T) иерархия, executive-on-Pi
+## Core Idea: 3-Layer Hierarchy, Executive on Pi
 
-Разделение **по латентности**, а не по машине. Медленный VLM никогда не на реактивном пути; робот автономен по навигации без сети.
+The split is based on **latency**, not on machine boundaries. The slow VLM is
+never on the reactive path; the robot remains autonomous for navigation without
+network access.
 
+```text
+  EXTERNAL VLM API    +-----------------------------------------------+
+  OpenAI-compatible   | Qwen3-VL-30B-A3B as a separate service/cloud  |  ~0.05-0.3 Hz
+  cloud/server        | vLLM/SGLang/provider, not hosted on edge/Pi   |  3-20 s
+                      +-----------------------^-----------------------+
+                                              | HTTP, async, non-reactive
+                    +-------------------------+-----------------------+
+  EDGE / PC (GPU)   | Planner Orchestrator: HTTP client, no GPU       | event-driven (vlm)
+                    | single-in-flight, p99 timeout, breaker,         |
+                    | notes/summary buffer (vlm only)                 |
+                    | Perception: open-vocab detector (YOLOE/DINO+SAM)| on demand (GPU)
+                    | SLAM (RTAB-Map) -> low-rate map->odom correction| 1-2 Hz
+                    +---------------+---------------------------------+
+                                    | Wi-Fi (rmw_zenoh, chrony, QoS)
+                                    | small/event messages only; idle ~= 0
+  ------------------+---------------+-------------------------------------------
+                    v
+  ROBOT (Pi 5)      +-----------------------------------------------+
+                    | Executive: Search Coordinator (FSM/BT)        | 1-10 Hz
+                    | owns mission, local frontiers, skill actions  | holds committed
+                    | Explore/GoTo/Approach/GetObs/Stop             | subgoal/default
+                    +-----------------------------------------------+
+                    | Reactive: light Nav2, map_odom_relay, EKF,    | 10-50 Hz,
+                    | target_pixel_to_goal, local /scan             | local
+                    +-----------------------------------------------+
+                    | Safety: cmd_vel watchdog, Collision Monitor,  | hard RT,
+                    | real CiA-402 quick-stop -> EPOS4/CAN          | network-independent
+                    +-----------------------------------------------+
 ```
-  ВНЕШНИЙ VLM API     ┌───────────────────────────────────────────────┐
-  (OpenAI-совмест.;   │  Qwen3-VL-30B-A3B — отдельный сервис / облако   │  ~0.05–0.3 Гц
-  облако/отд. сервер; │  (vLLM/SGLang или провайдер); НЕ на edge/Pi     │  (3–20 с)
-  НЕ хостим у себя)   └───────────────────────▲───────────────────────┘
-                                              │ HTTP (OpenAI-совместимый), async, вне реактива
-                    ┌─────────────────────────┴─────────────────────┐
-  EDGE / ПК (GPU)   │  Planner Orchestrator — HTTP-клиент, без GPU:   │  событийно (vlm)
-                    │  single-in-flight · p99-timeout · breaker ·     │
-                    │  notes/summary-буфер (только режим vlm)         │
-                    │  Перцепция: open-vocab детектор (YOLOE/DINO+SAM)│  по запросу (GPU)
-                    │  SLAM (RTAB-Map) → low-rate map→odom correction │  1–2 Гц (GPU)
-                    └───────────────┬───────────────────────────────┘
-                                    │ Wi-Fi (rmw_zenoh, chrony, QoS deadline/liveliness)
-                                    │ только мелкие/событийные сообщения; idle ≈ 0
-  ──────────────────────────────────┼──────────────────────────────────────────────
-                                    ▼
-  РОБОТ (Pi 5)      ┌───────────────────────────────────────────────┐
-                    │  Executive: Search Coordinator (FSM/BT)        │  1–10 Гц
-                    │  владеет миссией · фронтиры локально · skill-   │  держит committed
-                    │  actions (Explore/GoTo/Approach/GetObs/Stop)   │  subgoal + default
-                    ├───────────────────────────────────────────────┤
-                    │  Реактив: Nav2(облегч.) · map_odom_relay · EKF │  10–50 Гц,
-                    │  · target_pixel_to_goal · /scan (локально)     │  локально
-                    ├───────────────────────────────────────────────┤
-                    │  Safety: cmd_vel watchdog · Collision Monitor  │  жёсткий RT,
-                    │  · РЕАЛЬНЫЙ CiA-402 quick-stop → EPOS4/CAN      │  не зависит от сети
-                    └───────────────────────────────────────────────┘
-```
 
-## Инварианты (нерушимые)
+## Invariants
 
-1. **VLM вне реактивного контура.** Реактив (EKF, Nav2, control, safety) и FLAT работают локально и не ждут Wi-Fi/VLM. Новый план принимается только в безопасной **commit-точке** (consensus-horizon).
-2. **TF не рвём через Wi-Fi.** Полная цепочка `map→odom→base_link` собирается локально на Pi: EKF даёт `odom→base_link`, `map_odom_relay` применяет редкую коррекцию от edge-SLAM (last-good + гейт скачка/ковариации) и сам ребродкастит `map→odom` локально.
-3. **Никаких тяжёлых потоков по Wi-Fi.** PointCloud2/сырой depth не передаём; `/scan` генерируется локально; на edge уходит один сжатый keyframe по событию.
-4. **Перцепция — событийный сервис.** Сегментация — один запрос на детекцию (UUID-идемпотентность, single-in-flight), не поток. Координату цели всегда вычисляет `target_pixel_to_goal` из геометрии; VLM/детектор координат не порождают.
-5. **`flat` — это и baseline, и постоянный fallback `vlm`.** `vlm` строится как надстройка; при потере VLM/edge/Wi-Fi система бесшовно деградирует в `flat`.
-6. **Безопасность — отдельный слой с двумя независимыми стопами**, инвариантный во всех режимах деградации.
+1. **The VLM is outside the reactive loop.** EKF, Nav2, control, safety, and FLAT
+   run locally and do not wait for Wi-Fi or the VLM. A new plan is adopted only
+   at a safe **commit point**.
+2. **TF is not streamed over Wi-Fi.** The full `map->odom->base_link` chain is
+   assembled locally on the Pi. EKF provides `odom->base_link`; `map_odom_relay`
+   applies a low-rate edge-SLAM correction using last-good state and
+   jump/covariance gates, then rebroadcasts `map->odom` locally.
+3. **No heavy streams over Wi-Fi.** PointCloud2 and raw depth are not sent.
+   `/scan` is generated locally. The edge receives one compressed event
+   keyframe.
+4. **Perception is an event service.** Segmentation is one detection request
+   with UUID idempotency and single-in-flight semantics, not a stream. The target
+   coordinate is always computed by `target_pixel_to_goal`; neither the VLM nor
+   the detector creates navigation coordinates.
+5. **`flat` is both the baseline and permanent `vlm` fallback.** `vlm` is an
+   extension layer. If VLM/edge/Wi-Fi is lost, the system degrades seamlessly to
+   `flat`.
+6. **Safety is a separate layer with two independent stop mechanisms**, invariant
+   across all degradation modes.
 
-## Два режима (кратко; детали — [MODES.md](MODES.md))
+## Two Modes
 
-- **`flat`** — дано описание цели → SEARCH (локальные фронтиры с гистерезисом) → DETECT (детектор → пиксель → 3D-цель) → DRIVE (Nav2). Ноль зависимости от VLM.
-- **`vlm`** — Planner Orchestrator декомпозирует инструкцию в дерево/последовательность **FLAT-решаемых подзадач**, периодически **перепланирует** по истории. Реплан медленный → зарезервирован **lead-time**: пока FLAT исполняет текущую подзадачу, следующий план считается асинхронно и принимается в commit-точке. Модель ведёт **компактные заметки самой себе** (notes/summary buffer) вместо хранения кадров, чтобы держать токен-бюджет и латентность.
+- **`flat`**: target description -> SEARCH with local frontiers and hysteresis ->
+  DETECT through detector/pixel/3D goal -> DRIVE through Nav2. It has no VLM
+  dependency.
+- **`vlm`**: Planner Orchestrator decomposes the instruction into a tree or
+  sequence of **FLAT-solvable subtasks**, periodically replanning from history.
+  Replanning is slow, so lead-time is reserved: while FLAT executes the current
+  subtask, the next plan is computed asynchronously and adopted at a commit
+  point. The model keeps compact self-notes rather than storing frames, which
+  keeps the token budget and latency bounded.
 
-## FMEA must-fix (вшиты в ROADMAP, критичны для «продакшен»)
+## FMEA Must-Fix Items
 
-- **Реальный CiA-402 quick-stop** на RT-пути `write()` (сейчас код только логирует fault; quick-stop отсутствует) — без блокирующего 50 мс SDO; per-cycle fault poll; обработка CAN bus-off.
-- **Approach не объявляет «доехал» по устаревшему пикселю** — проверка свежести потока детекций **на латче успеха** (`nav_status`), а не только на входе.
-- **Смена инструкции = ABORT-and-reset + mission-epoch**, инвалидирующий все in-flight UUID.
-- **Сначала zero-VLM FLAT baseline на Pi** и гейт на нём; гистерезис выбора фронтира; chrony-offset « 0.1 с; облегчить Nav2.
+- Real CiA-402 quick-stop on the RT `write()` path. The previous code only
+  logged faults; quick-stop was missing. It must avoid blocking 50 ms SDO calls,
+  poll faults per cycle, and handle CAN bus-off.
+- Approach must not declare "reached" from a stale pixel. Freshness is checked
+  at the success latch (`nav_status`), not only at skill entry.
+- Instruction changes require ABORT-and-reset plus mission epoch invalidation for
+  all in-flight UUIDs.
+- Establish a zero-VLM FLAT baseline on the Pi first; use it as a gate. Include
+  frontier hysteresis, chrony offset below 0.1 s, and a lighter Nav2 profile.
 
-## Целевой стек
+## Target Stack
 
-ROS 2 Jazzy · Gazebo Harmonic (gz-sim8) + ros_gz + gz_ros2_control · rmw_zenoh · chrony · Nav2 (NavFn+DWB) · robot_localization (EKF) · RTAB-Map · open-vocab детектор (YOLOE/DINO+SAM) на edge-GPU · **внешний OpenAI-совместимый VLM API** (Qwen3-VL-30B-A3B; чем поднят эндпоинт — vLLM≥0.11/SGLang/облако — вне системы) · RealSense D435i · Maxon EPOS4 (CiA-402/SocketCAN).
+ROS 2 Jazzy, Gazebo Harmonic (gz-sim8), ros_gz, gz_ros2_control, rmw_zenoh,
+chrony, Nav2 (NavFn + DWB), robot_localization (EKF), RTAB-Map, open-vocabulary
+detector (YOLOE/DINO+SAM) on edge GPU, external OpenAI-compatible VLM API
+(Qwen3-VL-30B-A3B; endpoint hosting through vLLM/SGLang/cloud is outside this
+system), RealSense D435i, and Maxon EPOS4 (CiA-402/SocketCAN).

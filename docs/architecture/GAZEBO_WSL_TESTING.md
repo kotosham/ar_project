@@ -1,155 +1,185 @@
-> **Поправки верификации (имеют приоритет над текстом ниже).**
-> - **`tc netem` НЕ работает на стоковом ядре WSL2** (нет модуля `sch_netem`) — ровно как `vcan`. Для инъекции деградации Wi-Fi нужен **пересобранный WSL2-ядро** с `CONFIG_NET_SCH_NETEM` (+`CONFIG_NET_CLS_*`), либо второй физический хост / не-WSL VM. Без этого сетевые FMEA-строки в WSL2 **невоспроизводимы** (в матрице ниже — «только с кастомным ядром»).
-> - **VLM — внешний OpenAI-совместимый API, не self-hosted на edge.** Planner Orchestrator — лёгкий HTTP-клиент (`base_url`), GPU не требует; вопрос «влезает ли 30B в VRAM dev-машины» к системе **не относится**. Edge-GPU обслуживает только сегментацию (YOLOE/DINO+SAM) и SLAM (RTAB-Map). Кто хостит эндпоинт (отдельный сервер vLLM/SGLang или облако) — деталь развёртывания; для sim в `base_url` подставляется доступный эндпоинт.
-> - **GUI gz под WSLg:** идти через **XWayland (X11)**; при чёрном экране/краше OGRE2 — **снять `WAYLAND_DISPLAY`** и/или `LIBGL_ALWAYS_SOFTWARE=1`. Возможны утечка памяти WSLg и зависание при закрытии 3D-окна.
-> - **GPU-рендер сенсоров OGRE2 под WSL2 ненадёжен** (краши, чёрные кадры, откат на CPU). Симулированный RealSense RGB-D может не давать целевой FPS в WSL2 — валидировать на нативном Linux / edge-хосте.
-> - **gz `DiffDrive` ждёт `geometry_msgs/Twist`, а Nav2/`diff_drive_controller` (Jazzy) шлёт `TwistStamped`** — согласовать мостом / `use_stamped_vel`, иначе sim-робот не поедет.
-> - **vcan не воспроизводит настоящий bus-off** (виртуальный loopback) — его можно лишь скриптово сымитировать в fake-EPOS4; истинный bus-off — только на железе.
+> **Verification corrections.**
+> - **`tc netem` does not work on the stock WSL2 kernel** because `sch_netem` is
+>   missing, just like `vcan`. Wi-Fi degradation injection in WSL2 requires a
+>   custom WSL2 kernel with `CONFIG_NET_SCH_NETEM` and related classifier options,
+>   or a second physical host / non-WSL VM. Without that, network FMEA rows are
+>   not reproducible in stock WSL2.
+> - **The VLM is an external OpenAI-compatible API, not self-hosted on edge.**
+>   Planner Orchestrator is a light HTTP client and does not require GPU. Edge GPU
+>   is used for segmentation (YOLOE/DINO+SAM) and SLAM (RTAB-Map).
+> - **Gazebo GUI under WSLg:** prefer XWayland/X11. If OGRE2 shows a black screen
+>   or crashes, unset `WAYLAND_DISPLAY` and/or use `LIBGL_ALWAYS_SOFTWARE=1`.
+> - **OGRE2 GPU sensor rendering under WSL2 is unreliable.** Validate target FPS
+>   on native Linux or the edge host when possible.
+> - **gz `DiffDrive` expects `geometry_msgs/Twist`, while Jazzy
+>   `diff_drive_controller`/Nav2 can publish `TwistStamped`.** Use a bridge or
+>   `use_stamped_vel` consistently.
+> - **vcan does not reproduce real bus-off.** It can only be scripted in a
+>   fake-EPOS4; real bus-off needs hardware.
 
-## Тестирование в Gazebo на WSL2 Ubuntu
+# Gazebo Testing on WSL2 Ubuntu
 
-Этот раздел описывает, как поднять и отлаживать всю систему `robust` (ветка `robust` в `ar_project` и `object_tracking`) в симуляции до выхода на реальное железо. Симуляция — **первый** обязательный этап: сначала измеряется чистый Pi-baseline (FLAT, без VLM), и только после него включаются VLM-режим и деградации. Все приведённые ниже команды выполняются внутри образа WSL2 Ubuntu (Ubuntu 24.04 + ROS 2 Jazzy).
+This document describes how to start and debug the `robust` system in simulation
+before moving to hardware. Simulation is the first required stage: measure the
+clean Pi baseline (FLAT, no VLM) first, then enable VLM mode and degradation
+tests. Commands assume WSL2 Ubuntu 24.04 with ROS 2 Jazzy.
 
-### 1. Симулятор: Gazebo Sim (gz), не Classic
+## 1. Simulator: Gazebo Sim (gz), not Classic
 
-Репозиторий уже использует **Gazebo Sim** (новый `gz`, ранее «Ignition»), а не Gazebo Classic. Это подтверждается описанием робота: плагины с пространством имён `gz::sim::systems::*` (`gz-sim-diff-drive-system`, `gz-sim-joint-state-publisher-system` в `gazebo_control.xacro`), интеграция через `gz_ros2_control/GazeboSimSystem` (`ros2_control.xacro`), мост `ros_gz_bridge` (`config/gz_bridge.yaml`) и запуск симулятора командой `gz sim ... --force-version 8` в `launch_sim.launch.py`. Для ROS 2 Jazzy штатная и протестированная связка — **Gazebo Harmonic (gz-sim8)** + `ros_gz` + `gz_ros2_control`. Classic в документации и сборках не используем и не упоминаем как опцию.
-
-Запуск симуляции (из `launch_sim.launch.py`):
+The repository uses **Gazebo Sim** (`gz`, formerly Ignition), not Gazebo Classic.
+Robot plugins use the `gz::sim::systems::*` namespace, `gz_ros2_control` provides
+ROS 2 control integration, `ros_gz_bridge` connects topics, and
+`launch_sim.launch.py` starts `gz sim --force-version 8`. For ROS 2 Jazzy, the
+supported stack is **Gazebo Harmonic (gz-sim8)** + `ros_gz` +
+`gz_ros2_control`.
 
 ```bash
-# FLAT/baseline: управление колёсами штатным DiffDrive-плагином gz (use_ros2_control:=false)
+# FLAT baseline with the built-in gz DiffDrive plugin
 ros2 launch ar_project launch_sim.launch.py world:=<path>/test_world.sdf gui:=true
 
-# Полный стек, идентичный железу по интерфейсу управления (см. раздел 3)
+# Full stack with the same control interface shape as hardware
 ros2 launch ar_project launch_sim.launch.py use_ros2_control:=true gui:=false
 ```
 
-### 2. Симуляция сенсорного набора (RealSense-подобный RGB + выровненный depth + IMU)
+## 2. Simulated Sensor Set
 
-Цель — чтобы перцепция (`object_tracking`) и `target_pixel_to_goal` получали **те же топики и те же `frame_id`**, что и на реальном роботе с RealSense, и не знали, что под ними симуляция.
+The goal is for perception (`object_tracking`) and `target_pixel_to_goal` to see
+the same topic names and frame IDs as on the RealSense hardware.
 
-**RGB + depth.** Уже реализовано в `description/camera_gazebo_sensors.xacro`: два gz-сенсора (`type="camera"` и `type="depth"`), 640×480 @ 30 Гц, `horizontal_fov=1.089`, `clip near=0.05 far=8.0`, привязанные к оптическому кадру `camera_link_optical` (`gz_frame_id`). `depth_camera.xacro` сохраняет legacy-кадры `depth_camera_link*` как алиасы поверх того же физического `camera_link`, поэтому существующий код продолжает работать без правок. `camera_gazebo_sensors.xacro` намеренно вынесен отдельно — реальное описание робота (`robot_hardware.urdf.xacro`) содержит только геометрию и кадры, а sim-сенсоры подключаются только в симуляции.
+**RGB + depth.** `description/camera_gazebo_sensors.xacro` provides two gz
+sensors (`camera` and `depth`), 640x480 @ 30 Hz, with matching FOV and optical
+frame. Legacy `depth_camera_link*` frames remain aliases so existing code keeps
+working.
 
-**Эмуляция «aligned depth».** Реальная RealSense публикует `aligned_depth_to_color`. В симуляции отдельного выравнивания нет: depth-сенсор смонтирован на тот же оптический кадр, что и RGB, с тем же FOV и разрешением, поэтому пиксели уже совпадают. Совпадение топиков обеспечивает `config/gz_bridge.yaml`, который ремаппит один gz-топик глубины на все имена, ожидаемые стеком:
+**Aligned depth emulation.** Sim depth is mounted to the same optical frame and
+resolution as RGB, so pixels already match. `config/gz_bridge.yaml` remaps the
+depth topic to the names expected by the stack, including
+`camera/camera/aligned_depth_to_color/image_raw`. PointCloud2 is allowed only for
+local checks in simulation; raw depth and point clouds must not cross Wi-Fi.
 
-- `camera/camera/color/image_raw` и `camera/camera/color/camera_info` — RGB;
-- `camera/camera/depth/image_rect_raw` → дополнительно публикуется как `camera/camera/aligned_depth_to_color/image_raw` (то самое имя, что использует реальный драйвер и потребляет `target_pixel_to_goal`);
-- `camera/camera/aligned_depth_to_color/camera_info` берётся из **color/camera_info** (совпадение интринсиков выровненного потока).
+**IMU.** gz-IMU was not present at the time this note was written. To reproduce
+the EKF pipeline, add the `gz-sim-imu-system` plugin, an IMU sensor on `base_link`
+or `imu_link`, and a `sensor_msgs/msg/Imu` bridge with the same topic name as the
+hardware driver.
 
-Важно: `gz_bridge.yaml` уже содержит `camera/camera/depth/color/points` (PointCloud2). В симуляции этот топик допустимо использовать **только локально** для проверки; **по Wi-Fi его и raw-depth слать запрещено** (архитектурное правило) — для costmap локально генерируется `/scan` через `depthimage_to_laserscan`. Это правило одинаково в sim и на железе, и его нужно тестировать именно так: detector/SLAM на edge получают RGB и низкочастотные сообщения, а не облака точек.
+## 3. EPOS4/CAN Hardware Interface Emulation
 
-**IMU.** В текущем описании gz-IMU **ещё нет** (в `camera_gazebo_sensors.xacro` его нет, упоминание `imu` встречается только в комментарии `depth_camera.xacro`). Для воспроизведения связки EKF (`robot_localization`) её нужно добавить — это работа ветки `robust`:
+On hardware, wheels are controlled by `ar_project/EmbodiedRobotSystem` using
+CiA-402 over SocketCAN. In simulation this plugin is replaced by one of two
+paths controlled by `use_ros2_control`:
 
-1. В мир (SDF) добавить системный плагин: `<plugin filename="gz-sim-imu-system" name="gz::sim::systems::Imu"/>`.
-2. На `base_link` (или отдельный `imu_link`) добавить gz-сенсор `type="imu"`, `always_on=true`, `update_rate` под вход EKF (например 50–100 Гц), `<topic>imu/data</topic>`, `gz_frame_id` = кадр IMU.
-3. В `gz_bridge.yaml` добавить мост `sensor_msgs/msg/Imu` ↔ `gz.msgs.IMU`, `direction: GZ_TO_ROS`, с тем же ROS-именем топика, что у реального драйвера (то имя, на которое подписан `imu_orientation_filter`/`robot_localization`).
+- **`use_ros2_control:=false`**: uses the built-in gz DiffDrive plugin. This is
+  the simplest FLAT baseline path, but it is not identical to the hardware
+  control stack.
+- **`use_ros2_control:=true`**: uses `gz_ros2_control/GazeboSimSystem` with the
+  same controllers (`diff_cont`, `joint_broad`) and wheel command/state
+  interfaces. This is the preferred integration test mode because everything
+  above the hardware plugin matches hardware.
 
-Так EKF в симуляции получает odom (от DiffDrive или диф-контроллера) + IMU и выдаёт `odom->base_link` ровно как на железе.
+Gazebo does **not** test real CiA-402 quick-stop, statusword/fault behavior,
+non-blocking SDO, CAN bus-off, or frame loss. Those require real EPOS4 hardware
+or a fake-EPOS4 over SocketCAN/vcan.
 
-### 3. Эмуляция аппаратного интерфейса EPOS4/CAN
-
-На железе колёсами управляет `ros2_control`-плагин `ar_project/EmbodiedRobotSystem` (CiA-402 поверх SocketCAN, описан в `ros2_control_hardware.xacro`). В симуляции этот плагин не используется — вместо него один из двух механизмов, выбираемых тем же аргументом `use_ros2_control`, который уже есть в `robot.urdf.xacro` и `launch_sim.launch.py`:
-
-- **`use_ros2_control:=false`** — `description/gazebo_control.xacro`: штатный gz-плагин `gz-sim-diff-drive-system` (`/cmd_vel` → odom/TF). Самый простой путь для FLAT-baseline, но это **не** путь `ros2_control`, поэтому стек управления не идентичен железу.
-- **`use_ros2_control:=true`** — `description/ros2_control.xacro`: `gz_ros2_control/GazeboSimSystem` + те же контроллеры (`diff_cont` = `diff_drive_controller`, `joint_broad` = `joint_state_broadcaster`, `config/my_controllers.yaml`). Это **mock-замена** реального hardware-интерфейса: весь стек выше `ros2_control` (Nav2, twist_mux, диф-контроллер, имена интерфейсов команд/состояний колёс) **идентичен** железу, меняется только нижний `<hardware>`-плагин (`GazeboSimSystem` вместо `EmbodiedRobotSystem`). Для верификации интеграции используем именно этот режим.
-
-Принцип «sim-vs-hw switch»: один и тот же `use_ros2_control` переключает `<hardware>`-плагин в URDF (xacro `if/unless` в `robot.urdf.xacro`), не затрагивая остальной граф. На железе грузится `robot_hardware.urdf.xacro` с `EmbodiedRobotSystem`; в sim — `ros2_control.xacro` с `GazeboSimSystem`. Альтернатива `GazeboSimSystem` — generic `mock_components/GenericSystem` из `ros2_control` (петля «команда = состояние» без физики); полезна для unit-тестов контроллера без gz, но для интеграции предпочтителен `GazeboSimSystem` с реальной физикой колёс.
-
-**Что НЕ тестируется в Gazebo (нужно железо или fake-EPOS4 на vcan):**
-
-- **Реальный CiA-402 quick-stop** (controlword `0x6040`) на RT-пути `write()`. Ни `gz-diff-drive`, ни `GazeboSimSystem` не моделируют конечный автомат CiA-402, statusword, fault-реакцию и неблокирующий SDO. Это FMEA-must-fix (текущий код только логирует fault) и проверяется **только** на реальном EPOS4 или через **fake-EPOS4** поверх SocketCAN.
-- **CAN bus-off, per-cycle fault poll, потеря кадров на шине.** Шины CAN в gz нет.
-
-**Эмуляция CAN на WSL2 (vcan + fake-EPOS4).** SocketCAN/`vcan` в WSL2 из коробки нет: стандартный WSL-ядро не содержит модулей `can`, `can_raw`, `vcan` — нужен **пересобранный кастомный WSL-ядро** с включённым «CAN bus subsystem support» (через `.wslconfig`). После этого:
+Stock WSL2 does not provide `vcan`. A custom WSL2 kernel with CAN support is
+required before using:
 
 ```bash
 sudo modprobe can can_raw vcan
 sudo ip link add dev vcan0 type vcan
 sudo ip link set up vcan0
-candump vcan0   # из can-utils
+candump vcan0
 ```
 
-Далее на `vcan0` поднимается **fake-EPOS4** — узел/скрипт, отвечающий на SDO/PDO как привод CiA-402 (statusword, переходы состояний, эмуляция fault и bus-off по запросу). Тогда `EmbodiedRobotSystem` можно тестировать с `can_interface_name:=vcan0` без gz-физики. Это отдельный тестовый стенд, а не часть запуска Gazebo: gz даёт физику движения, vcan+fake-EPOS4 — поведение привода и обработку отказов. Их можно сводить, но для большинства FMEA-сценариев привода gz не нужен.
+## 4. Emulating the Pi-PC Split on One WSL Machine
 
-### 4. Эмуляция разделения Pi↔PC на одной WSL-машине
+The real system has two hosts over Wi-Fi with `rmw_zenoh`. On one WSL machine:
 
-Реальная система — два хоста (Pi и GPU-PC) поверх Wi-Fi с `rmw_zenoh` (один systemd-router на edge), multicast off, QoS deadline/liveliness на cross-link топиках. На одной WSL-машине это эмулируется так:
+- Use different `ROS_DOMAIN_ID` values to prove the Pi FLAT stack is autonomous
+  when edge disappears. This gives isolation but no cross-link.
+- Use a local zenoh router and run both node groups with
+  `RMW_IMPLEMENTATION=rmw_zenoh_cpp` to reproduce the real transport path for VLM
+  mode, QoS deadline/liveliness tests, circuit-breaker behavior, and commit-point
+  plan adoption.
 
-**Разделение графов.** Два варианта:
-- **`ROS_DOMAIN_ID`** — запускаем «Pi-узлы» в одном терминале с `ROS_DOMAIN_ID=10`, «edge-узлы» — с `ROS_DOMAIN_ID=20`. Полная изоляция, но без cross-link связи — годится для проверки, что Pi-стек (FLAT) **полностью автономен** и переживает «исчезновение» edge.
-- **Локальный zenoh-router** — поднять один `rmw_zenoh` router (как на edge) и запускать обе группы узлов с `RMW_IMPLEMENTATION=rmw_zenoh_cpp`, чтобы воспроизвести **реальный транспорт** cross-link. Это и есть рекомендуемый режим для VLM-mode и тестов QoS deadline/liveliness, circuit-breaker и адопции планов в commit-point.
+Network degradation requires `tc netem` or network namespaces on a kernel that
+supports them. Typical injections are latency, jitter, packet loss, duplication,
+reordering, and full link loss. These tests validate VLM/edge/Wi-Fi degradation
+to FLAT, last-good behavior in `map_odom_relay`, stale stamp rejection, and the
+Planner Orchestrator circuit breaker.
 
-**Инъекция сетевой деградации Wi-Fi (latency / loss / jitter).** Поскольку оба «хоста» на одной машине, трафик идёт через loopback и физических потерь нет — деградацию вносим искусственно:
+## 5. GPU Workloads under WSL2
 
-- **`tc netem`** на интерфейсе zenoh-трафика (или на `lo` через классификацию по порту): задержка, джиттер, потери, дублирование, переупорядочивание. Примеры:
-  ```bash
-  sudo tc qdisc add dev <iface> root netem delay 200ms 80ms loss 10% duplicate 2% reorder 25%
-  sudo tc qdisc change dev <iface> root netem loss 100%   # полный обрыв Wi-Fi
-  sudo tc qdisc del dev <iface> root                      # снять
-  ```
-- **Network namespaces** (`ip netns`) + veth-пара дают более реалистичную картину «двух хостов»: каждая группа узлов в своём namespace, `tc netem` на veth между ними. Это точнее эмулирует обрыв линка (узлы реально перестают видеть друг друга на сетевом уровне), тогда как `ROS_DOMAIN_ID`/loopback изолируют только логически.
+The VLM is an external OpenAI-compatible API and is **not** hosted on the
+edge/WSL2 machine. Planner Orchestrator is only an async HTTP client. Edge GPU is
+used for local workloads: segmentation models (YOLOE/GroundingDINO+MobileSAM)
+and RTAB-Map.
 
-Эти инструменты — основной способ тестировать **деградированные режимы**: VLM/edge/Wi-Fi loss → переход VLM-mode в FLAT, hold-last-good в `map_odom_relay`, отбрасывание устаревших stamp'ов, поведение circuit-breaker в Planner Orchestrator.
+Under WSL2, the CUDA driver is the Windows NVIDIA driver. Do not install the
+Linux display driver inside Ubuntu WSL. Install only the WSL-specific CUDA
+toolkit. `nvidia-smi` inside WSL should see the GPU.
 
-### 5. GPU-нагрузки под WSL2 (CUDA-on-WSL2)
+## 6. GUI: WSLg vs Headless gz
 
-**Важно: VLM — это внешний OpenAI-совместимый API; его НЕ хостим на edge/WSL2-боксе.** Planner Orchestrator — лёгкий async **HTTP-клиент** к этому эндпоинту (`base_url` + ключ), сам он GPU не требует. Кто и как поднимает эндпоинт (vLLM/SGLang на отдельной машине с достаточной VRAM, или облачный провайдер) — деталь развёртывания **вне** этой системы. Поэтому вопрос «влезает ли 30B в VRAM dev-машины» к роботу/симу **не относится**: при смене эндпоинта меняется только `base_url`.
+- **WSLg** provides Gazebo/RViz windows without a separate Windows X server.
+  `launch_sim.launch.py` already handles the environment whitelist needed when
+  running from VS Code/snap-like environments.
+- **Headless** (`gui:=false`) starts `gz sim -s --headless-rendering`. This is
+  suitable for CI, FMEA matrix runs, and machines without rendering support.
+  Cameras/depth still render off-screen.
 
-На edge-GPU под WSL2 запускаются **только локальные GPU-нагрузки**: сегментационные модели (YOLOE / GroundingDINO+MobileSAM) и SLAM (RTAB-Map). Именно их нужно обеспечить CUDA.
+If GPU rendering fails under WSL2, use `LIBGL_ALWAYS_SOFTWARE=1` as a slower
+fallback.
 
-**Драйвер и toolkit.** Под WSL2 CUDA-драйвер — это **Windows-драйвер NVIDIA**. Внутри Ubuntu-WSL **нельзя** ставить Linux-дисплей-драйвер: пакеты `cuda`, `cuda-drivers` из обычного репозитория тянут Linux-драйвер и ломают связку. Ставится только **WSL-specific CUDA toolkit** (вариант `Linux > x86_64 > WSL-Ubuntu` на сайте NVIDIA). Проверка: `nvidia-smi` внутри WSL должен видеть GPU.
+## 7. `use_sim_time`, Clock, and TF Discipline
 
-**VRAM для локальных моделей.** Сегментация (YOLOE / DINO+MobileSAM) по VRAM скромная (единицы ГБ) и спокойно живёт на dev-GPU рядом с RTAB-Map. 30B-VLM на этой карте **не поднимаем** — он за API.
+Hard rule: **all nodes use `use_sim_time:=true` in simulation and `false` on
+hardware**. The simulation clock comes from gz through `/clock`. EKF, Nav2,
+controllers, `target_pixel_to_goal`, perception, and `map_odom_relay` must all
+use the same clock, otherwise TF tolerance, depth-match, and pixel-age windows
+are measured against inconsistent time.
 
-**Эндпоинт VLM для sim/dev.** В `base_url` Planner Orchestrator подставляется любой доступный OpenAI-совместимый сервис: удалённый/облачный или self-hosted (например vLLM ≥ 0.11.0 с поддержкой Qwen3-VL на отдельном сервере). Остальной стек при смене эндпоинта не меняется. Для удешевления отладки допустимо временно указать меньшую модель — это конфиг (`base_url`/имя модели), а не изменение архитектуры.
+On hardware, chrony keeps host clocks synchronized. In simulation on one machine,
+true Pi-edge clock skew is not reproduced automatically; inject stamp offsets in
+mock publishers when testing stale-stamp rejection.
 
-### 6. GUI: WSLg vs headless gz
+RTAB-Map on edge should publish a low-rate map->odom correction message, not a TF
+stream. `map_odom_relay` on the Pi applies it, holds last-good, gates bad jumps
+or covariance, rejects stale stamps, and rebroadcasts `map->odom` locally.
 
-- **WSLg** (встроенный в современный WSL2) даёт GUI без X-сервера на Windows: окно Gazebo и RViz2 рендерятся через Wayland/`WAYLAND_DISPLAY`. `launch_sim.launch.py` уже учитывает особенность окружения: GUI-режим (`gui:=true`) стартует gz через `env -i` с whitelist'ом переменных (`DISPLAY`, `WAYLAND_DISPLAY`, `XDG_RUNTIME_DIR`, `XAUTHORITY` и т.д.), потому что запуск из snap-окружения VS Code ломает рантайм gz.
-- **Headless** (`gui:=false`) запускает `gz sim -s --headless-rendering` — сервер без окна. Это режим для CI, для прогона FMEA-матрицы и для машин без WSLg/без рендера. Камеры/depth в gz при этом продолжают рендериться (нужен `--headless-rendering` для off-screen GPU-рендера сенсоров), а инспекция идёт через `ros2 topic`/`rviz2` отдельно или через запись rosbag.
+## 8. Simulation Test Matrix
 
-Под WSL2 для GPU-рендера сенсоров gz желателен тот же NVIDIA-GPU (off-screen rendering); при проблемах с рендером — software-fallback (`LIBGL_ALWAYS_SOFTWARE=1`) ценой производительности.
-
-### 7. Дисциплина `use_sim_time`, clock и TF
-
-Жёсткое правило: **в симуляции `use_sim_time:=true` у ВСЕХ узлов, на железе — `false` у всех**. Источник времени в sim — gz, публикующий `/clock`; мост `clock` (`rosgraph_msgs/msg/Clock`, `GZ_TO_ROS`) уже есть первым в `gz_bridge.yaml`. Все узлы (EKF, Nav2, контроллеры, `target_pixel_to_goal`, перцепция, `map_odom_relay`) обязаны подписываться на `/clock` и брать stamp'ы оттуда — иначе окна валидности (TF `transform_tolerance` 0.2 с, depth-match 0.35 с, pixel-age 1.5 с) измеряются по неправильным часам.
-
-В текущих launch-файлах `use_sim_time` зашит в значения для sim (например в `launch_sim.launch.py`: `rsp` с `use_sim_time:'true'`, `twist_mux`/`odom_to_tf` с `use_sim_time:True`; `my_controllers.yaml` имеет `use_sim_time: true`). Для ветки `robust` это нужно **параметризовать единым аргументом** `use_sim_time` на верхнем уровне launch, прокидываемым во **все** включаемые launch и узлы, со значением `true` в sim-bringup и `false` в `hardware_bringup.launch.py`. Не должно остаться узла с зашитым `True`, который случайно попадёт на железо.
-
-**Clock skew (chrony).** На железе время хостов синхронизируется chrony; смещение обязано быть **много меньше** самого узкого окна (0.2 с TF). В симуляции на одной машине часы общие (`/clock`), поэтому реальный skew между Pi и edge **не воспроизводится** транспортом сам по себе — его нужно **инжектировать искусственно** (см. матрицу: сдвиг stamp'ов на edge-узле/в fake-публикаторе), чтобы проверить, что `map_odom_relay` отвергает устаревшие stamp'ы и что gating по covariance/jump работает.
-
-**TF в sim.** `map->odom` от RTAB-Map на edge — это **низкочастотная коррекция-сообщение**, а НЕ поток TF. `map_odom_relay` на Pi применяет её, держит last-good, гейтит скачок/covariance, отвергает устаревшие stamp'ы и **сам** ребродкастит `map->odom` локально с частотой под `transform_tolerance < 0.2 с`. `odom->base_link` даёт EKF. В sim это проверяется: edge-SLAM питается симулированной RGB-D, выдаёт коррекцию, а на Pi-стороне TF-дерево остаётся валидным даже при обрыве линка (hold-last-good).
-
-### 8. Матрица sim-тестов (FMEA → инъекция в Gazebo)
-
-| FMEA-сценарий | Инъекция в sim | Ожидаемая реакция | Воспроизводимо в Gazebo? |
+| FMEA scenario | Sim injection | Expected reaction | Gazebo reproducible? |
 |---|---|---|---|
-| **VLM медленный** | задержать ответ VLM API (sleep в mock-эндпоинте OpenAI API); сжать timeout до p99 | single-in-flight держит план, FLAT продолжает текущий subtask, replan по lead-time, адопция в commit-point | Да (gz + mock/remote VLM API) |
-| **VLM API недоступен / edge упал** | вернуть HTTP 5xx/timeout от VLM API (mock); отдельно — убить edge-узлы (детектор/SLAM) | circuit-breaker открывается, VLM-mode деградирует в FLAT, миссия продолжается | Да |
-| **Обрыв Wi-Fi** | `tc netem loss 100%` / `ip link set down` veth между namespace'ами | `map_odom_relay` hold-last-good, Nav2 в `odom` продолжает, нет «фриза» Pi-стека | Да (netns точнее, чем loopback) |
-| **map->odom залип/расходится** | заморозить или подать скачкообразную коррекцию из mock-SLAM | gating по jump/covariance отвергает плохую коррекцию, держит last-good, ребродкаст продолжается | Да |
-| **Clock skew** | искусственно сдвинуть stamp'ы edge-публикатора относительно `/clock` | отвержение устаревших stamp'ов в relay; проверка границ 0.2/0.35/1.5 с | Частично — нужна ручная инъекция (общие часы в sim) |
-| **OOM детектора** | ограничить VRAM (`CUDA_VISIBLE_DEVICES`/MPS-лимит) или убить detector; подать «нет детекций» | стек не падает, FLAT exploration продолжается, нет ложного «reached» | Да (на GPU-WSL2); реальный CUDA-OOM — частично |
-| **Stale/дублирующий результат** | повторно подать тот же UUID-результат / устаревший по времени | UUID-идемпотентность отбрасывает дубль; stale по pixel-age (1.5 с) игнорируется | Да |
-| **Изменение инструкции в полёте** | отправить новую инструкцию во время активного subtask | executive ABORT-and-reset, инкремент mission-epoch, инвалидизация in-flight UUID, preempt action-серверов | Да (чисто логика, gz даёт движение) |
-| **Осцилляция фронтиров** | мир с двумя почти равными фронтирами | гистерезис (margin по score + min dwell) не даёт переключаться туда-обратно | Да (важен подбор world) |
-| **Approach по устаревшему пикселю** | прекратить поток детектора во время ApproachDetection (детекция «замерла») | обнаружение staleness потока, **нет** авто-`SUCCEEDED` по goal_locked на старом пикселе, переход в re-detect/abort | Да |
-| **CiA-402 quick-stop / CAN bus-off** | — | реальный controlword 0x6040, per-cycle fault poll, обработка bus-off | **Нет** — только железо или vcan+fake-EPOS4 (раздел 3) |
-| **cmd_vel watchdog / Collision Monitor** | прекратить публикацию `/cmd_vel`; поставить препятствие перед роботом в gz | watchdog тормозит, Collision Monitor режет скорость/стопит до столкновения | Да |
+| Slow VLM | delay mock/OpenAI API response | FLAT continues current subtask; replan is adopted at commit point | yes |
+| VLM API unavailable / edge down | HTTP 5xx/timeout or kill edge nodes | circuit breaker opens, VLM mode degrades to FLAT | yes |
+| Wi-Fi loss | netem loss 100% or veth down | relay holds last-good, Nav2 continues in odom, Pi stack does not freeze | yes with proper netem/netns support |
+| map->odom stuck/diverging | freeze or jump mock SLAM correction | jump/covariance gate rejects bad correction and holds last-good | yes |
+| Clock skew | offset stamps in edge publisher | stale stamps are rejected by relay and pixel-age checks | partial |
+| Detector OOM/down | kill detector or return no detections | exploration continues; no false reached | yes |
+| Stale/duplicate result | replay UUID or stale result | UUID and age filters reject it | yes |
+| Instruction change in flight | send new instruction during active subtask | abort/reset, mission epoch increment, in-flight UUID invalidation | yes |
+| Frontier oscillation | world with two nearly equal frontiers | hysteresis prevents switching back and forth | yes |
+| Approach with stale pixel | stop detector stream during approach | no auto-success from old pixel; re-detect/abort path | yes |
+| CiA-402 quick-stop / CAN bus-off | hardware/fake-EPOS4 only | real quick-stop, per-cycle fault poll, bus-off handling | no in Gazebo |
+| cmd_vel watchdog / Collision Monitor | stop `/cmd_vel`; add obstacle | watchdog brakes; Collision Monitor cuts speed/stops | yes |
 
-**Сводно — что НЕ ловится в Gazebo:** реальная динамика CiA-402 (quick-stop, statusword, неблокирующий SDO), CAN bus-off и потери кадров на шине, истинный clock skew между физическими хостами (в sim общий `/clock`), реальная физика потерь Wi-Fi (эмулируется `tc netem`/netns), а также честный CUDA-OOM именно на целевой VRAM edge-бокса, если dev-машина мощнее/слабее. Всё остальное из FMEA воспроизводится комбинацией gz + mock/remote VLM + `tc netem`/netns + sim-инъекции stamp'ов и потоков.
+Not fully covered by Gazebo: real CiA-402 dynamics, CAN bus-off and CAN frame
+loss, true clock skew between physical hosts, real Wi-Fi physics, and honest CUDA
+OOM on the exact target edge GPU if the dev GPU differs.
 
----
+Relevant files:
 
-Релевантные файлы (абсолютные пути):
-- `C:\Users\dende\code\mobile_robot_navigation\ar_project\description\camera_gazebo_sensors.xacro` — gz RGB+depth сенсоры (сюда добавлять gz-IMU)
-- `C:\Users\dende\code\mobile_robot_navigation\ar_project\description\camera.xacro`, `depth_camera.xacro` — кадры/алиасы RGB и depth
-- `C:\Users\dende\code\mobile_robot_navigation\ar_project\description\ros2_control.xacro` (`GazeboSimSystem`, sim) vs `ros2_control_hardware.xacro` (`EmbodiedRobotSystem`/EPOS4 CAN, hw)
-- `C:\Users\dende\code\mobile_robot_navigation\ar_project\description\gazebo_control.xacro` — gz DiffDrive (FLAT-baseline путь)
-- `C:\Users\dende\code\mobile_robot_navigation\ar_project\description\robot.urdf.xacro` — переключатель `use_ros2_control`
-- `C:\Users\dende\code\mobile_robot_navigation\ar_project\launch\launch_sim.launch.py` — запуск gz, `gui`/headless, `use_sim_time`
-- `C:\Users\dende\code\mobile_robot_navigation\ar_project\config\gz_bridge.yaml` — мост clock/camera/odom, алиасы aligned_depth
-- `C:\Users\dende\code\mobile_robot_navigation\ar_project\config\my_controllers.yaml` — `diff_cont`/`joint_broad`, `use_sim_time`
-- `C:\Users\dende\code\mobile_robot_navigation\ar_project\launch\hardware_bringup.launch.py` — hw-bringup (здесь `use_sim_time:=false`)
+- `ar_project/description/camera_gazebo_sensors.xacro`
+- `ar_project/description/camera.xacro`, `depth_camera.xacro`
+- `ar_project/description/ros2_control.xacro`
+- `ar_project/description/ros2_control_hardware.xacro`
+- `ar_project/description/gazebo_control.xacro`
+- `ar_project/description/robot.urdf.xacro`
+- `ar_project/launch/launch_sim.launch.py`
+- `ar_project/config/gz_bridge.yaml`
+- `ar_project/config/my_controllers.yaml`
+- `ar_project/launch/hardware_bringup.launch.py`
 
-Примечания по правкам, требуемым в ветке `robust` (не сделаны в текущем коде): добавить gz-IMU-сенсор + плагин `gz-sim-imu-system` и мост IMU; вынести `use_sim_time` в единый прокидываемый аргумент во всех launch вместо зашитых `True`.
+Pending `robust` work noted here: add gz IMU sensor/plugin/bridge and expose a
+single top-level `use_sim_time` argument through all launches instead of hardcoded
+`True` values.

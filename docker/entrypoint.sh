@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Источает ROS и собранный workspace, затем выполняет переданную команду (CMD/command).
+# Source ROS and the built workspace, then execute the provided command.
 set -e
 source "/opt/ros/${ROS_DISTRO:-jazzy}/setup.bash"
 if [ -f /ws/install/setup.bash ]; then

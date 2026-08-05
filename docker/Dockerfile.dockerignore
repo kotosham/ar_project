@@ -1,6 +1,6 @@
-# Per-Dockerfile ignore (BuildKit ищет его рядом с Dockerfile, путь относительно
-# корня контекста сборки = mobile_robot_navigation). Ускоряет сборку и держит образ
-# чистым: в контекст не уходят артефакты, веса и секреты.
+# Per-Dockerfile ignore. BuildKit looks for this file next to Dockerfile, with
+# paths relative to the build context root (mobile_robot_navigation). It speeds
+# up builds and keeps artifacts, weights, and secrets out of the image context.
 **/.git
 **/build
 **/install
@@ -9,13 +9,13 @@
 **/*.py[cod]
 **/.pytest_cache
 
-# Веса моделей (~600 МБ) — монтируются томом в detector, не пекутся в образ.
+# Model weights (~600 MB) are mounted into detector, not baked into the image.
 **/model_weights
 
-# Секреты не должны попадать в слои образа (vlm.env читается compose как env_file).
+# Secrets must not enter image layers; compose reads vlm.env as env_file.
 **/*.env
 !**/*.env.example
 
-# Не нужно для сборки.
+# Not needed for builds.
 ar_project/docs
 ar_project/deploy

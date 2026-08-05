@@ -1,298 +1,319 @@
-# Структура репозиториев, интерфейсы и оценки
+# Repository Structure, Interfaces, and Estimates
 
-Настоящий раздел фиксирует целевую раскладку кода на ветках `robust` обоих репозиториев (`ar_project` — сторона Raspberry Pi / executive; `object_tracking` — сторона edge / восприятие), полную инвентаризацию интерфейсов ROS 2 (`.action` / `.msg` / `.srv`), таблицу сложности и трудозатрат, а также пошаговую дорожную карту (ROADMAP) в порядке «сначала чиним, потом строим» (FIX-FIRST). Архитектура считается утверждённой по итогам двух проходов проектирования и FMEA; раздел её реализует, а не пересматривает. Целевая платформа — ROS 2 Jazzy, тестирование в Gazebo внутри образа WSL2 Ubuntu.
+This document records the target code layout for the `robust` branches of both
+repositories (`ar_project` for Raspberry Pi / executive, `object_tracking` for
+edge perception), ROS 2 interface inventory, complexity estimates, and the
+FIX-FIRST implementation order. The architecture is considered accepted after
+design and FMEA review; this document implements it rather than reopening it.
+Target platform: ROS 2 Jazzy, with Gazebo testing inside WSL2 Ubuntu.
 
-## 1. Раскладка пакетов и репозиториев на ветках `robust`
+## 1. Package Layout
 
-### 1.1 Принцип разделения
+### 1.1 Split Principle
 
-- **`ar_project` (Pi-сторона, executive-on-Pi).** Здесь живут все узлы реального времени и реактивный контур: EKF, облегчённый Nav2, `map_odom_relay`, Search Coordinator (executive FSM/BT), idempotent skill-серверы, `target_pixel_to_goal` (переиспользуется без изменений), `depthimage_to_laserscan`, драйвер RealSense, `ros2_control` + `EmbodiedRobotSystem` (EPOS4 CiA-402 поверх SocketCAN), слой безопасности. VLM на этой стороне нет никогда.
-- **`object_tracking` (edge/PC-сторона).** Здесь живут SLAM (RTAB-Map), открытословарный детектор (DINO+MobileSAM по умолчанию для target query и fixed context vocab; YOLOE только legacy/comparison), Planner Orchestrator (лёгкий async HTTP-клиент к **внешнему OpenAI-совместимому VLM API**; саму модель здесь не хостим) и семантическая память / буфер заметок. На edge-GPU крутятся только детектор и SLAM; VLM — за API.
-- **Транспорт между хостами** — `rmw_zenoh` (один systemd-роутер на edge), fallback Fast DDS LARGE_DATA + Discovery Server, multicast выключен, буферы сокетов 12 МБ, синхронизация часов `chrony` на всех хостах, QoS deadline/liveliness на кросс-линковых топиках. PointCloud2 / сырые depth-потоки по Wi-Fi не передаются никогда — `/scan` генерируется локально на Pi.
+- **`ar_project` (Pi side, executive-on-Pi)**: real-time and reactive nodes live
+  here: EKF, light Nav2, `map_odom_relay`, Search Coordinator, skill servers,
+  `target_pixel_to_goal`, `depthimage_to_laserscan`, RealSense driver,
+  `ros2_control` + `EmbodiedRobotSystem`, and safety. VLM never runs on this
+  side.
+- **`object_tracking` (edge/PC side)**: RTAB-Map SLAM, open-vocabulary detector
+  (DINO+MobileSAM for target and fixed context vocabulary; YOLOE legacy/comparison
+  only), Planner Orchestrator as a light HTTP client to an external
+  OpenAI-compatible VLM API, semantic memory, and notes buffer. Edge GPU runs
+  detector and SLAM only; VLM is behind an API.
+- **Transport**: `rmw_zenoh` with one router on edge, Fast DDS fallback,
+  multicast disabled, 12 MB socket buffers, chrony on all hosts, and QoS
+  deadline/liveliness on cross-link topics. PointCloud2 and raw depth never cross
+  Wi-Fi; `/scan` is generated locally on the Pi.
 
-### 1.2 Новые пакеты интерфейсов (interface-only)
+### 1.2 Interface-Only Packages
 
-Чтобы не плодить циклические зависимости между кодом и сообщениями и чтобы оба хоста могли собрать только описание интерфейса без тяжёлых зависимостей, типы выносятся в два отдельных пакета `rosidl` (build_type `ament_cmake`, без логики):
+Interface packages avoid cyclic dependencies and let both hosts build message
+definitions without heavy runtime dependencies:
 
-- **`ar_project_msgs`** (НОВЫЙ, в репозитории `ar_project`) — интерфейсы Pi-стороны и кросс-линка, потребляемые executive: skill-actions (`ExploreFrontier`, `GoToPose`, `ApproachDetection`, `GetObservation`, `Stop`), `MapOdomCorrection.msg`, heartbeat-сообщения, типы планов/заметок, которые читает executive.
-- **`object_tracking_msgs`** (НОВЫЙ, в репозитории `object_tracking`) — интерфейсы перцепции и планировщика: `DetectTarget.action`, `SeekObject.action` (высокоуровневая миссия), `PlanStep.msg` / `Notes.msg`, типы кандидатов Set-of-Mark.
+- **`ar_project_msgs`**: Pi-side and cross-link interfaces used by the executive:
+  skill actions, `MapOdomCorrection.msg`, heartbeat/status messages, and plan
+  types consumed by the executive.
+- **`object_tracking_msgs`**: perception/planning interfaces:
+  `DetectTarget.action`, `SeekObject.action`, `PlanStep.msg`, `Notes.msg`, and
+  Set-of-Mark candidate types.
 
-Граница проведена так, чтобы Pi-пакеты зависели только от `ar_project_msgs`, а узлы, обслуживающие высокоуровневую миссию и восприятие, — от `object_tracking_msgs`. Если на практике executive начнёт зависеть и от `SeekObject`/`DetectTarget`, эти два типа допустимо продублировать ссылкой через `<depend>` на оба пакета — оба пакета чисто интерфейсные и легковесные.
+Both packages are pure `rosidl` and lightweight.
 
-### 1.3 Новые пакеты с логикой
+### 1.3 Logic Packages
 
-- **`search_coordinator`** (НОВЫЙ, `ar_project`-репозиторий, отдельный `ament_python`/`ament_cmake` пакет). Координатор-executive: FSM/BehaviorTree, локальное извлечение фронтиров из costmap, владелец состояния миссии, единственный потребитель решений планировщика. Здесь же — skill-action-серверы (`ExploreFrontier` / `GoToPose` / `ApproachDetection` / `GetObservation` / `Stop`), `map_odom_relay`, локальный извлекатель фронтиров с гистерезисом, mission-epoch / UUID-идемпотентность, default-productive-action.
-- **`planner_orchestrator`** (НОВЫЙ, `object_tracking`-репозиторий, `ament_python`). Лёгкий async **HTTP-клиент к внешнему OpenAI-совместимому VLM API** (`base_url` + ключ; модель не хостим, GPU не требует): single-in-flight, UUID-идемпотентность, timeout по измеренному p99, circuit-breaker, structured/enum tool-call, streaming; буфер заметок/суммаризации; anytime/async-replan с adoption в commit-point.
+- **`search_coordinator`** (`ar_project`): executive FSM/BT, local frontier
+  extraction, mission owner, skill action servers, `map_odom_relay`, frontier
+  hysteresis, mission epoch, UUID idempotency, and default productive action.
+- **`planner_orchestrator`** (`object_tracking`): async HTTP client to the
+  external VLM API. It implements single-in-flight requests, UUID idempotency,
+  p99 timeout, circuit breaker, structured tool-call output, streaming, notes
+  summarization, and anytime/async replanning with commit-point adoption.
 
-Причина выделить координатор и оркестратор в отдельные пакеты, а не складывать скрипты в `ar_project`/`object_tracking`: у них принципиально разный жизненный цикл сборки и зависимостей (координатор — Pi-only, реал-тайм; оркестратор — HTTP-клиент к внешнему VLM API на edge, без локальной модели/GPU), и каждый должен переживать удаление «soup» из старого пакета без регрессий.
+### 1.4 Reused / New / Deleted
 
-### 1.4 Что ПЕРЕИСПОЛЬЗУЕТСЯ / что НОВОЕ / что УДАЛЯЕТСЯ
+**Reused:**
 
-**REUSED (переиспользуется как есть или с минимальной правкой):**
-- `scripts/target_pixel_to_goal.py` — переиспользуется без изменений по математике pixel + aligned-depth → метрическая 3D-цель. Планировщик НИКОГДА не выдаёт навигационные координаты; координаты рождаются только здесь. Из узла удаляются только хуки «soup» (см. ниже про `goal_locked`/`prompt_ack`), а сам бридж становится утилитой, вызываемой skill-сервером `ApproachDetection`.
-- Сегментационные бэкенды в `object_tracking/`: `yoloe_image_segmentation.py` (default), `dino_mobilesam_image_segmentation.py` (fallback). `clip_image_segmentation.py` остаётся в репозитории, но из грудинга исключается (CLIPSeg для grounding отброшен).
-- Nav2 (`config/nav2_params.yaml`, `launch/navigation_launch.py`, `launch/localization_launch.py`) — переиспользуется, но облегчается (Phase 2).
-- EKF (`config/ekf_*.yaml`, `robot_localization`, odom→base_link 20 Гц) — переиспользуется.
-- EPOS4/CAN `EmbodiedRobotSystem` (`src/embodied_robot_system.cpp`, `include/ar_project/embodied_robot_system.hpp`, `ar_project_hardware_plugins.xml`, `config/epos4_diffdrive/*`) — переиспользуется, но дорабатывается реальным quick-stop (Phase 0).
-- RealSense (`launch/realsense_rgbd_pi.launch.py`), `description/*`, URDF/xacro, `ros2_control` diff_cont, `twist_mux` — переиспользуются.
-- `depthimage_to_laserscan` — переиспользуется как локальный источник `/scan` для obstacle-слоя costmap.
+- `target_pixel_to_goal.py` math for pixel + aligned depth -> metric target.
+- Segmentation backends in `object_tracking`.
+- Nav2 configs, EKF configs, EPOS4/CAN hardware interface, RealSense launches,
+  URDF/xacro, `ros2_control`, `twist_mux`, and `depthimage_to_laserscan`.
 
-**NEW (создаётся заново):**
-- Пакеты `ar_project_msgs`, `object_tracking_msgs`, `search_coordinator`, `planner_orchestrator`.
-- `map_odom_relay` (узел), локальный frontier-extractor с гистерезисом, skill-action-серверы, `cmd_vel`-watchdog, реальный CiA-402 quick-stop на пути `write()`, RTAB-Map online-localization → low-rate `MapOdomCorrection` (не TF-поток), Set-of-Mark рендеринг кандидатов, notes/summary-буфер.
-- Bring-up для Gazebo-on-WSL и конфигурации `rmw_zenoh`/`chrony`.
+**New:**
 
-**DELETED (удаляется):**
-- `scripts/reliable_prompt_sender.py` + `launch/reliable_prompt_sender.launch.py` — узел повторной отправки промпта по латч-строке. Заменяется надёжной доставкой миссии через action `SeekObject` (UUID + feedback вместо retry-по-таймеру).
-- «Soup» из латч-булей и латч-строк: топики `/target_goal_locked` (`Bool`, TRANSIENT_LOCAL), `/target_prompt_ack` (`String`, TRANSIENT_LOCAL), `/target_prompt` (`String`) и привязанная к ним логика `goal_locked`/`lock_goal_on_publish`/авто-`SUCCEEDED` по `nav_status` внутри `target_pixel_to_goal.py` и `tracker_node.py`. Владение состоянием и признак «достигли» переходят в executive и в результат skill-action `ApproachDetection`. В частности, удаляется авто-success по `nav_status` (status==4) на возможно устаревшем пикселе — см. FMEA-фикс в Phase 3.
-- Реактивный `search_cmd_pub` → `/cmd_vel` прямо из `tracker_node.py` (раскрутка на месте при поиске) — удаляется; поиск становится `ExploreFrontier`-скиллом на Pi. Edge никогда не пишет в реактивный путь.
+- `ar_project_msgs`, `object_tracking_msgs`, `search_coordinator`,
+  `planner_orchestrator`.
+- `map_odom_relay`, local frontier extractor with hysteresis, skill action
+  servers, `cmd_vel` watchdog, real CiA-402 quick-stop, RTAB-Map low-rate
+  `MapOdomCorrection`, Set-of-Mark rendering, and notes/summary buffer.
+- Gazebo-on-WSL bringup plus `rmw_zenoh`/`chrony` configuration.
 
-### 1.5 Где живёт документация
+**Deleted / replaced:**
 
-- Корневой `README.md` каждого репозитория — overview и точка входа.
-- `ar_project/docs/architecture.md` — этот раздел + диаграммы 3T, карта топиков/TF, бюджет задержек (TF 0.2 с, depth-match 0.35 с, pixel-age 1.5 с, chrony-offset).
-- `ar_project/docs/safety.md` — слой безопасности и FMEA-фиксы Pi-стороны (quick-stop, watchdog, Collision Monitor, bus-off).
-- `object_tracking/docs/perception.md` и `object_tracking/docs/planner_orchestrator.md` — детектор/Set-of-Mark и VLM-оркестрация (контракт tool-call, circuit-breaker, notes-буфер, тайминг replan).
-- `docs/roadmap.md` (в `ar_project`, как «головном» репо) — копия ROADMAP из раздела 4 как живой чек-лист.
-- Каждый пакет — собственный `README.md` с интерфейсами и параметрами.
+- `reliable_prompt_sender.py` and its launch file. `SeekObject` action replaces
+  timer-based prompt retry.
+- Latched "soup" topics and logic: `/target_goal_locked`, `/target_prompt_ack`,
+  `/target_prompt`, `goal_locked`, `lock_goal_on_publish`, and auto-success from
+  `nav_status` inside old perception/goal code.
+- Reactive `/cmd_vel` writes from `tracker_node.py`; search becomes an
+  `ExploreFrontier` skill on the Pi. Edge never writes to the reactive path.
 
-## 2. Инвентаризация интерфейсов
+## 2. Interface Inventory
 
-Ниже — определения, которые нужно создать. Имена полей даны на английском (идентификаторы), назначение — на русском. Все action’ы preemptable, несут feedback и UUID для идемпотентности; повторная цель с тем же `request_id` в рамках текущего `mission_epoch` не выполняется повторно, а присоединяется к идущему исполнению.
+All actions are preemptable, carry feedback, and include UUID-style request IDs
+for idempotency. Repeating the same `request_id` inside the current
+`mission_epoch` attaches to the existing execution rather than executing twice.
 
-### 2.1 Высокоуровневая миссия
+### 2.1 High-Level Mission
 
-**`object_tracking_msgs/action/SeekObject.action`** — единая точка входа миссии (заменяет `reliable_prompt_sender`).
-```
+`object_tracking_msgs/action/SeekObject.action`
+
+```text
 # Goal
-string instruction          # естественно-языковая инструкция/цель
-string request_id            # UUID идемпотентности
-uint32 mission_epoch         # эпоха миссии; смена инструкции инкрементит эпоху
-bool allow_vlm               # true=VLM mode, false=форсировать FLAT
----
-# Result
-uint8 outcome                # 0=SUCCEEDED 1=ABORTED 2=PREEMPTED 3=DEGRADED_SUCCESS
-geometry_msgs/PoseStamped final_pose
-string summary               # финальная заметка/итог
----
-# Feedback
-string state                 # текущее состояние FSM (SEARCH/DETECT/DRIVE/APPROACH/REPLAN/...)
-string active_subtask        # человекочитаемое имя подзадачи
-float32 progress             # 0..1
-uint32 mission_epoch
-```
-
-### 2.2 Skill-actions (исполняются на Pi, владелец — executive)
-
-Общие правила: каждый принимает `request_id` (UUID) и `mission_epoch`; в feedback идут таймстампы и индикатор «свежести» входных данных; result содержит enum `outcome` и причину.
-
-**`ar_project_msgs/action/ExploreFrontier.action`** — локальное фронтир-исследование.
-```
-# Goal
+string instruction
 string request_id
 uint32 mission_epoch
-int32 frontier_id            # -1 = выбрать лучший локально; >=0 = заданный из списка
-float32 max_travel_m         # ограничение хода
+bool allow_vlm
 ---
 # Result
-uint8 outcome                # SUCCEEDED/ABORTED/PREEMPTED/NO_FRONTIER
-geometry_msgs/PoseStamped reached_pose
+uint8 outcome
+geometry_msgs/PoseStamped final_pose
+string summary
 ---
 # Feedback
+string state
+string active_subtask
+float32 progress
+uint32 mission_epoch
+```
+
+### 2.2 Pi Skill Actions
+
+`ar_project_msgs/action/ExploreFrontier.action`
+
+```text
+string request_id
+uint32 mission_epoch
+int32 frontier_id
+float32 max_travel_m
+---
+uint8 outcome
+geometry_msgs/PoseStamped reached_pose
+---
 float32 distance_remaining
 int32 selected_frontier_id
 float32 frontier_score
 ```
 
-**`ar_project_msgs/action/GoToPose.action`** — поездка к позе через Nav2.
-```
-# Goal
+`ar_project_msgs/action/GoToPose.action`
+
+```text
 string request_id
 uint32 mission_epoch
 geometry_msgs/PoseStamped target_pose
 float32 xy_tolerance
 float32 yaw_tolerance
 ---
-# Result
-uint8 outcome                # SUCCEEDED/ABORTED/PREEMPTED
+uint8 outcome
 geometry_msgs/PoseStamped reached_pose
 ---
-# Feedback
 float32 distance_remaining
 builtin_interfaces/Time stamp
 ```
 
-**`ar_project_msgs/action/ApproachDetection.action`** — финальный подъезд к детекции (обёртка над `target_pixel_to_goal`).
-```
-# Goal
+`ar_project_msgs/action/ApproachDetection.action`
+
+```text
 string request_id
 uint32 mission_epoch
-string target_label          # что подтверждаем при подъезде
-float32 approach_offset      # метры; по умолчанию 0.58
-float32 max_pixel_age_s      # порог свежести пикселя; по умолчанию 1.5
-bool use_locked_target       # продолжить к ранее подтвержденной map-точке
+string target_label
+float32 approach_offset
+float32 max_pixel_age_s
+bool use_locked_target
 geometry_msgs/PointStamped locked_target_point
 ---
-# Result
-uint8 outcome                # SUCCEEDED/ABORTED/PREEMPTED/STALE_DETECTION/LOST_TARGET
+uint8 outcome
 geometry_msgs/PoseStamped reached_pose
 geometry_msgs/PointStamped target_point
 geometry_msgs/PoseStamped final_goal_pose
 float32 final_distance_m
 ---
-# Feedback
 float32 distance_to_target
-float32 detection_age_s      # возраст последнего валидного пикселя
-bool detection_fresh         # false => НЕ объявлять reached (FMEA-фикс)
+float32 detection_age_s
+bool detection_fresh
 ```
 
-**`ar_project_msgs/action/GetObservation.action`** — собрать наблюдение/кадр(ы) для VLM/детектора в безопасной точке.
-```
-# Goal
+`ar_project_msgs/action/GetObservation.action`
+
+```text
 string request_id
 uint32 mission_epoch
-bool with_setofmark          # отрисовать кандидатов Set-of-Mark
+bool with_setofmark
 ---
-# Result
 uint8 outcome
-sensor_msgs/CompressedImage view   # сжатый кадр (через edge, не PointCloud2)
+sensor_msgs/CompressedImage view
 object_tracking_msgs/Candidate[] candidates
 geometry_msgs/PoseStamped observed_from
 ---
-# Feedback
-string phase                 # ALIGNING/CAPTURING/RENDERING
+string phase
 ```
 
-**`ar_project_msgs/action/Stop.action`** — идемпотентная безопасная остановка / приведение в default-productive-action.
-```
-# Goal
+`ar_project_msgs/action/Stop.action`
+
+```text
 string request_id
 uint32 mission_epoch
-uint8 mode                   # 0=SOFT_STOP 1=HOLD 2=QUICK_STOP_REQUEST
+uint8 mode
 ---
-# Result
 uint8 outcome
 ---
-# Feedback
 bool zero_velocity_confirmed
 ```
 
-### 2.3 Восприятие
+### 2.3 Perception
 
-**`object_tracking_msgs/action/DetectTarget.action`** — открытословарная детекция по запросу (replace для непрерывного «трекера» при сервисном режиме).
-```
-# Goal
+`object_tracking_msgs/action/DetectTarget.action`
+
+```text
 string request_id
 uint32 mission_epoch
-string query                 # описание цели (open-vocab)
+string query
 bool render_setofmark
 float32 conf_threshold
 ---
-# Result
-uint8 outcome                # FOUND/NOT_FOUND/ABORTED
+uint8 outcome
 object_tracking_msgs/Candidate[] candidates
-sensor_msgs/CompressedImage annotated   # Set-of-Mark рендер
+sensor_msgs/CompressedImage annotated
 ---
-# Feedback
 uint32 frames_processed
 float32 best_confidence
 ```
 
-**`object_tracking_msgs/msg/Candidate.msg`** — кандидат Set-of-Mark.
-```
-uint32 mark_id               # номер метки на Set-of-Mark рендере
+`object_tracking_msgs/msg/Candidate.msg`
+
+```text
+uint32 mark_id
 string label
 float32 confidence
-geometry_msgs/Point pixel    # x=u, y=v, z=depth_m (как в target_pixel_to_goal)
+geometry_msgs/Point pixel
 string source_frame_id
 builtin_interfaces/Time stamp
 sensor_msgs/RegionOfInterest bbox
 ```
 
-### 2.4 Локализация / коррекция карты
+### 2.4 Localization
 
-**`ar_project_msgs/msg/MapOdomCorrection.msg`** — низкочастотная коррекция map→odom от edge-SLAM (НЕ TF-поток). Применяется/перевещается локально `map_odom_relay`.
-```
-std_msgs/Header header              # stamp = время, к которому относится коррекция
-geometry_msgs/TransformStamped map_to_odom   # сама поправка map->odom
-float64[36] covariance              # ковариация поправки (для гейтинга по неопределённости)
-float64 fitness                     # качество подгонки SLAM (0..1)
-uint32 seq                          # монотонный счётчик для отбраковки stale/переупорядочивания
-bool relocalized                    # true при скачке (перелокализация) -> гейтинг скачка
-```
+`ar_project_msgs/msg/MapOdomCorrection.msg`
 
-### 2.5 Планирование (VLM mode)
-
-**`object_tracking_msgs/msg/PlanStep.msg`** — один шаг плана, всегда FLAT-решаемый скилл; VLM выбирает только из реального списка (enum tool-call), координат не порождает.
-```
-uint8 skill                  # 0=EXPLORE_FRONTIER 1=GO_TO_POSE 2=APPROACH_DETECTION 3=GET_OBSERVATION 4=STOP
-int32 frontier_id            # для EXPLORE_FRONTIER: id из реального списка фронтиров
-uint32 approach_target_mark  # для APPROACH_DETECTION: mark_id из Candidate-списка
-string arg_label             # текстовый аргумент (например, имя комнаты/объекта)
-string step_id               # UUID шага
-string rationale             # краткое обоснование (для логов/notes)
+```text
+std_msgs/Header header
+geometry_msgs/TransformStamped map_to_odom
+float64[36] covariance
+float64 fitness
+uint32 seq
+bool relocalized
 ```
 
-**`object_tracking_msgs/msg/Notes.msg`** — компактные заметки/суммаризация (буфер контекста вместо хранения кадров).
+### 2.5 Planning
+
+`object_tracking_msgs/msg/PlanStep.msg`
+
+```text
+uint8 skill
+int32 frontier_id
+uint32 approach_target_mark
+string arg_label
+string step_id
+string rationale
 ```
+
+`object_tracking_msgs/msg/Notes.msg`
+
+```text
 std_msgs/Header header
 uint32 mission_epoch
-string summary               # текущая компактная сводка от модели
-string[] facts               # дискретные факты (visited rooms, найденные/исключённые объекты)
-uint32 token_estimate        # оценка токенов для бюджетирования контекста
+string summary
+string[] facts
+uint32 token_estimate
 ```
 
-### 2.6 Heartbeat / здоровье кросс-линка
+### 2.6 Heartbeat / Health
 
-**`ar_project_msgs/msg/Heartbeat.msg`** — публикуется каждым кросс-линковым продьюсером с QoS deadline/liveliness; пропадание → переход VLM mode → FLAT.
-```
+`ar_project_msgs/msg/Heartbeat.msg`
+
+```text
 std_msgs/Header header
-string node_name             # "slam"/"detector"/"planner_orchestrator"/...
-uint8 status                 # 0=OK 1=DEGRADED 2=DOWN
+string node_name
+uint8 status
 float32 cpu_load
-float32 last_latency_ms      # измеренная задержка последнего ответа (для p99-таймаутов)
+float32 last_latency_ms
 uint32 mission_epoch
 ```
 
-Опциональный сервис для ручного/тестового форсирования режима:
-**`ar_project_msgs/srv/SetMode.srv`**
-```
-uint8 mode    # 0=FLAT 1=VLM
+Optional test service:
+
+`ar_project_msgs/srv/SetMode.srv`
+
+```text
+uint8 mode
 ---
 bool accepted
 uint8 active_mode
 ```
 
-## 3. Таблица сложности и трудозатрат
+## 3. Complexity and Effort
 
-Относительная сложность: S ≈ 1–2 дня, M ≈ 3–5 дней, L ≈ 6–10 дней (один инженер, включая тесты в Gazebo). Дни — грубая оценка, риск — вероятность регресса/переделки.
+Relative complexity: S ~1-2 days, M ~3-5 days, L ~6-10 days for one engineer,
+including Gazebo tests. Days are rough estimates; risk is regression/rework
+probability.
 
-| Компонент | Пакет | Сложность | Дни | Риск | Комментарий |
-|---|---|---|---|---|---|
-| Реальный CiA-402 quick-stop на пути `write()` (controlword 0x6040, без блокирующего 50 мс SDO) | ar_project (EmbodiedRobotSystem) | M | 4 | Высокий | RT-путь, требует hardware-in-the-loop; ошибка = небезопасность |
-| Per-cycle fault poll + CAN bus-off recovery | ar_project | M | 3 | Высокий | Сейчас только логирование раз в 100 циклов |
-| `cmd_vel` watchdog + Collision Monitor интеграция | ar_project / search_coordinator | S | 2 | Средний | Стандартные кирпичи Nav2 + watchdog-узел |
-| `use_sim_time` параметризация (убрать hard-coded True) | ar_project (конфиги/launch) | S | 1 | Низкий | Механическая правка во всех yaml/launch |
-| rmw_zenoh + chrony + 12МБ буферы + QoS deadline/liveliness | оба репо (bring-up) | M | 4 | Средний | Сетевые тонкости, кросс-хост отладка |
-| Gazebo-on-WSL bring-up + миры | ar_project (worlds/launch) | M | 3 | Средний | GPU/passthrough в WSL2 капризен |
-| Локальный `/scan` через depthimage_to_laserscan для costmap | ar_project | S | 1 | Низкий | Готовый пакет, настройка |
-| `ar_project_msgs` + `object_tracking_msgs` (все .action/.msg/.srv) | оба репо | S | 2 | Низкий | Объёмно, но прямолинейно |
-| Executive FSM/BT (Search Coordinator, mission state, default action) | search_coordinator | L | 9 | Высокий | Сердце системы; mission-epoch, owner состояния |
-| Локальный frontier-extractor + гистерезис (margin + min dwell) | search_coordinator | M | 4 | Средний | Антиосцилляция критична |
-| Skill-action серверы (Explore/GoTo/Approach/GetObs/Stop), UUID-идемпотентность, preemption | search_coordinator | L | 8 | Высокий | Preempt/idempotency легко сделать неверно |
-| `map_odom_relay` (hold-last-good, gating скачка/ковариации, отбраковка stale, rebroadcast < 0.2 с) | search_coordinator | M | 5 | Высокий | TF-корректность, гонки по времени |
-| Облегчение Nav2 (NavFn+DWB, local costmap в odom, controller 8–10 Гц, убрать лишнее) | ar_project | M | 3 | Средний | Сейчас 15 Гц; нужен профайлинг на Pi |
-| Адаптация `target_pixel_to_goal` (снять «soup», обернуть в ApproachDetection) | ar_project | S | 2 | Средний | Не сломать переиспользуемую математику |
-| RTAB-Map: offline mapping→.db + online localization→`MapOdomCorrection` (не TF) | object_tracking | M | 5 | Высокий | Переход от TF-стрима к сообщению-коррекции |
-| `DetectTarget` action + Set-of-Mark рендер (DINO+MobileSAM default; YOLOE legacy/comparison) | object_tracking | M | 5 | Средний | Бэкенды есть, нужен сервисный контракт |
-| Детектор: детект staleness потока (no auto-reached на устаревшем пикселе) | object_tracking / search_coordinator | S | 2 | Высокий | Прямой FMEA-фикс |
-| Planner Orchestrator (single-in-flight, UUID, p99-timeout, circuit-breaker, enum tool-call, streaming) | planner_orchestrator | L | 10 | Высокий | Самый трудный edge-компонент |
-| Notes/summary-буфер + бюджет токенов | planner_orchestrator | M | 4 | Средний | Контроль контекста/стоимости |
-| Anytime/async replan + commit-point adoption (lead-time) | planner_orchestrator + search_coordinator | M | 5 | Высокий | Тайминг; FLAT должен продолжать исполнять текущую подзадачу |
-| Деградация VLM→FLAT по heartbeat/circuit-breaker | оба репо | M | 3 | Высокий | Должно быть бесшовно |
-| Instruction-change = ABORT-and-reset + mission-epoch инвалидация UUID | search_coordinator | S | 2 | Высокий | FMEA-фикс; легко получить «зомби»-цели |
-| FMEA-тесты в Gazebo (инъекция отказов: stale TF, потеря edge, bus-off, скачок локализации) | оба репо (test) | M | 5 | Средний | Тестовая инфраструктура |
-| Удаление `reliable_prompt_sender` + латч-«soup» | ar_project | S | 1 | Низкий | Чистка; проверить, что никто не подписан |
-| Hardware bring-up (реальный робот, CAN, RealSense, Wi-Fi) | ar_project | L | 8 | Высокий | Интеграция «всё вместе» на железе |
+| Component | Package | Complexity | Days | Risk | Note |
+|---|---|---:|---:|---|---|
+| Real CiA-402 quick-stop in `write()` | ar_project | M | 4 | High | RT path, requires HIL |
+| Per-cycle fault poll + CAN bus-off recovery | ar_project | M | 3 | High | Previously only sparse logging |
+| `cmd_vel` watchdog + Collision Monitor | ar_project / search_coordinator | S | 2 | Medium | Standard Nav2/watchdog pieces |
+| `use_sim_time` parameterization | ar_project | S | 1 | Low | Mechanical launch/yaml cleanup |
+| rmw_zenoh + chrony + socket buffers + QoS | both | M | 4 | Medium | Cross-host networking |
+| Gazebo-on-WSL bringup + worlds | ar_project | M | 3 | Medium | GPU/WSL quirks |
+| Local `/scan` from depthimage_to_laserscan | ar_project | S | 1 | Low | Package setup |
+| Interface packages | both | S | 2 | Low | Straightforward but verbose |
+| Executive FSM/BT | search_coordinator | L | 9 | High | Mission ownership core |
+| Frontier extractor + hysteresis | search_coordinator | M | 4 | Medium | Anti-oscillation critical |
+| Skill action servers + idempotency/preemption | search_coordinator | L | 8 | High | Easy to get wrong |
+| `map_odom_relay` | search_coordinator | M | 5 | High | TF and timing correctness |
+| Light Nav2 profile | ar_project | M | 3 | Medium | Needs Pi profiling |
+| `target_pixel_to_goal` adaptation | ar_project | S | 2 | Medium | Preserve geometry |
+| RTAB-Map correction output | object_tracking | M | 5 | High | TF stream -> correction message |
+| `DetectTarget` action + Set-of-Mark | object_tracking | M | 5 | Medium | Backends already exist |
+| Detector stream staleness gate | object_tracking / search_coordinator | S | 2 | High | Direct FMEA fix |
+| Planner Orchestrator | planner_orchestrator | L | 10 | High | Hardest edge component |
+| Notes/summary buffer | planner_orchestrator | M | 4 | Medium | Context/cost control |
+| Async replan + commit adoption | both | M | 5 | High | FLAT must keep moving |
+| VLM->FLAT degradation | both | M | 3 | High | Must be seamless |
+| Instruction change reset | search_coordinator | S | 2 | High | Prevent zombie goals |
+| FMEA Gazebo tests | both | M | 5 | Medium | Failure injection infra |
+| Remove prompt/latched soup | ar_project | S | 1 | Low | Cleanup and subscription check |
+| Hardware bringup | ar_project | L | 8 | High | Full real robot integration |
 
-Суммарно грубо ≈ 110–120 человеко-дней; критический путь идёт через executive FSM, skill-серверы, `map_odom_relay` и Planner Orchestrator.
+Rough total: 110-120 person-days. Critical path: executive FSM, skill servers,
+`map_odom_relay`, and Planner Orchestrator.

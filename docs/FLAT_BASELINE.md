@@ -1,64 +1,83 @@
-# Базовая линия FLAT (Phase 2.10) — замороженный гейт
+# FLAT Baseline (Phase 2.10) - Frozen Gate
 
-Автономность FLAT без VLM (zero-VLM): инструкция → SEARCH (frontier'ы) → DETECT (детектор →
-`/target_pixel`) → APPROACH (Nav2), executive = SeekObject FSM `search_coordinator`.
-Здесь фиксируется измеренная базовая линия, которая служит гейтом для последующих фаз (ни одна
-фаза не доверяет роботу движение, пока FLAT не признан надёжным). Происхождение помечено по строкам:
-**[live-2026-06]** — текущая сессия, **[prior]** — более ранний seed-прогон с реальными YOLOE + Nav2,
-**[unit]** — чисто логический тест.
+FLAT autonomy without VLM (zero-VLM) follows:
 
-## Собранный сценарий
-- `flat_sim_bringup.launch.py` поднимает весь стек FLAT одной командой (sim →
-  RTAB-Map → Nav2 → frontier_extractor + coordinator), всё на симуляционном времени. **[live-2026-06]**
-  executive поднимается чисто: `search_coordinator up ... skills [approach_detection,
-  explore_frontier, get_observation, go_to_pose, stop]; epoch=0`.
-- Ограниченным мирам нужен однократный «посев» движения (motion seed), чтобы SLAM получил
-  неизвестные ячейки → frontier'ы: суммарно-нулевой seed с поворотом на месте даёт
-  **22 frontier'а** **[live-2026-06]**.
+```text
+instruction -> SEARCH (frontiers) -> DETECT (detector -> /target_pixel) -> APPROACH (Nav2)
+```
 
-## Измеренная базовая линия по действиям
-| Действие | Метрика | Источник |
+The executive is the `search_coordinator` SeekObject FSM. This document records
+the measured baseline used as a gate for later phases: no phase may trust the
+robot with autonomous motion until FLAT is considered reliable.
+
+Source tags:
+
+- **[live-2026-06]**: current session
+- **[prior]**: earlier seeded run with real YOLOE + Nav2
+- **[unit]**: logic-only test
+
+## Collected Scenario
+
+- `flat_sim_bringup.launch.py` starts the whole FLAT stack in one command:
+  simulation -> RTAB-Map -> Nav2 -> `frontier_extractor` + coordinator, all on
+  simulation time. **[live-2026-06]**
+- Executive starts cleanly with skills:
+  `approach_detection`, `explore_frontier`, `get_observation`, `go_to_pose`,
+  `stop`; epoch 0.
+- Bounded worlds need one motion seed so SLAM produces unknown cells and
+  frontiers. A zero-net rotation seed produced **22 frontiers**. **[live-2026-06]**
+
+## Measured Action Baseline
+
+| Action | Metric | Source |
 |---|---|---|
-| t_detect | YOLOE ~25 ms в прогретом состоянии · ~5.6 s холодная загрузка · ~0.87 s на смену prompt'а | [prior] |
-| | DetectTarget('bus') вживую: FOUND, conf 0.916, depth 1.68 m, ~десятки ms в прогретом состоянии | [live-2026-06] |
-| t_search | ~13.4 s на один frontier-перегон (проезд к центроиду frontier'а) | [prior, Nav2 active] |
-| t_approach | ~6 s реакция + ~12 s проезд ≈ 20 s суммарно; миссия SUCCEEDED | [prior, seeded] |
-| такт планировщика (режим VLM, для справки) | ~2 s/шаг с асинхронным replan (4.6) | [live-2026-06] |
+| `t_detect` | YOLOE ~25 ms warm, ~5.6 s cold load, ~0.87 s on prompt switch | [prior] |
+| `t_detect` | `DetectTarget('bus')`: FOUND, conf 0.916, depth 1.68 m, tens of ms warm | [live-2026-06] |
+| `t_search` | ~13.4 s for one frontier transfer to centroid | [prior, Nav2 active] |
+| `t_approach` | ~6 s reaction + ~12 s drive, about 20 s total; mission SUCCEEDED | [prior, seeded] |
+| VLM planning tick, reference only | ~2 s/step with async replan | [live-2026-06] |
 
-## Доказательства по критериям EXIT
-- **находит + подходит в чистом FLAT** — полный цикл SEARCH→DETECT→APPROACH→DONE = SUCCEEDED
-  **[prior]** (seed, реальный YOLOE, Nav2 active). В этой сессии SEARCH провалидирован вживую (см.
-  ниже); перегон-проезд в этом прогоне был ограничен активацией Nav2 (известная проблема ↓).
-- **нет осцилляции frontier'ов** — **[live-2026-06]** executive выбирает frontier'ы по
-  score и удерживает/заносит в blacklist, а не «дёргается» (наблюдаемая последовательность id 75→16→112→7→2,
-  различимые, ранжированные по score, без пинг-понга A↔B) + **[unit]** гистерезис `should_switch`
-  (шум ниже margin никогда не переключает; переключение только при beat>margin И dwell≥min).
-- **смена инструкции сбрасывает миссию** — **[unit]** инкремент epoch превращает летящий UUID в
-  «зомби» + `RequestDedup` очищается на границе epoch (нет повтора-зомби) + **[prior]** node-smoke
-  на вытеснение SeekObject (старая миссия → PREEMPTED).
-- **базовая линия заморожена** — этот документ.
+## EXIT Evidence
 
-## Известная проблема (найдена в этой сессии — помечена, не блокирует базовую линию)
-В консолидированном `flat_sim_bringup` на **хосте с ограниченными ресурсами (3.5 GiB WSL)**
-lifecycle Nav2 **не закончил активацию** к моменту, когда executive начал движение, поэтому каждый
-проезд `explore_frontier` возвращал `terminal=no_server`, и навык **ошибочно заносил в blacklist
-8+ валидных frontier'ов** как «недостижимые». В остальном логика executive корректна. Исправление в работе:
-трактовать `no_server` (Nav2-не-готов) как временный сбой — ждать/повторять вместо занесения в blacklist; и/или
-ставить старт миссии в зависимость от готовности Nav2. На железе с достаточными ресурсами (Pi из Phase 6) Nav2
-активируется до миссии, и эта ситуация не возникает.
+- **Find + approach in pure FLAT**: full SEARCH -> DETECT -> APPROACH -> DONE
+  cycle succeeded in the seeded prior run with real YOLOE and active Nav2. In
+  this session, SEARCH was validated live; motion was limited by a Nav2 activation
+  issue described below.
+- **No frontier oscillation**: executive selects frontiers by score, holds/blacklists
+  them, and does not ping-pong. Unit hysteresis tests confirm no switch below
+  margin and switch only when score beats margin and dwell time is satisfied.
+- **Instruction change resets mission**: unit tests confirm epoch increment turns
+  in-flight UUIDs into stale zombies and clears `RequestDedup`; prior smoke test
+  confirms SeekObject preemption.
+- **Baseline frozen**: this document is the gate record.
 
-## Оговорка: настоящее профилирование Pi-класса — это Phase 6
-CPU/частота/задержки на реальном **Pi 5 / 4 GB** измеряются во время аппаратного bring-up'а
-(см. `HIL_BRINGUP_CHECKLIST.md` §E). Числа здесь — это Gazebo-на-WSL (алгоритмические
-задержки), а не кремний Pi.
+## Known Issue
 
-## embodied против robust (по действиям)
-- **t_search** — embodied: поиск вращением на месте (крутиться, пока цель не войдёт в FOV; робот
-  остаётся на месте). robust: frontier-перегоны с перемещением (~13.4 s/перегон), которые реально исследуют
-  пространство. embodied быстрее на один «взгляд», но не может найти цель вне исходного FOV / за
-  стенами; robust покрывает карту. **Выигрыш по надёжности у robust.**
-- **t_detect** — идентично (тот же backend YOLOE), ~25 ms в прогретом состоянии.
-- **t_approach** — сопоставимо (та же геометрия pixel→3D + Nav2), но robust добавляет
-  **freshness-гейт** (нет ложного `reached` по устаревшему пикселю), которого у embodied не было.
-- **итог** — robust меняет немного «сырой» скорости поиска на реальное-нахождение-вещей + отсутствие
-  ложного reach + анти-осцилляцию + (в режиме VLM) бесшовную деградацию обратно на этот слой FLAT.
+In consolidated `flat_sim_bringup` on a resource-limited WSL host (3.5 GiB), the
+Nav2 lifecycle did not finish activation before executive motion began. Each
+`explore_frontier` transfer returned `terminal=no_server`, and the skill
+incorrectly blacklisted several valid frontiers as unreachable. The executive
+logic otherwise behaved correctly.
+
+Fix direction: treat `no_server` as a temporary Nav2-not-ready failure and wait
+or retry instead of blacklisting, and/or make mission start depend on Nav2
+readiness. On hardware with enough resources, Nav2 should activate before the
+mission.
+
+## Note on Pi-Class Profiling
+
+Real CPU/frequency/latency numbers for **Pi 5 / 4 GB** are measured during
+hardware bringup (see `HIL_BRINGUP_CHECKLIST.md` section E). Numbers here are
+Gazebo-on-WSL algorithmic timings, not Pi silicon timings.
+
+## Embodied vs Robust
+
+- **`t_search`**: embodied searches by rotating in place until the target enters
+  the FOV. robust uses frontier transfers that move through space. A single
+  embodied "look" is faster, but it cannot find targets outside the initial FOV
+  or behind geometry. robust improves reliability.
+- **`t_detect`**: same backend, about 25 ms warm.
+- **`t_approach`**: comparable geometry and Nav2 stack, but robust adds a
+  freshness gate to prevent false `reached` from stale pixels.
+- **Summary**: robust trades some raw search speed for actual space coverage,
+  stale-target protection, anti-oscillation, and seamless VLM-to-FLAT fallback.

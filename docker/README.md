@@ -1,85 +1,94 @@
-# Docker — поднятие стека на ПК
+# Docker - PC Stack Bringup
 
-Контейнеризует уровни архитектуры (см. [../docs/architecture/SOLUTION_OVERVIEW.md](../docs/architecture/SOLUTION_OVERVIEW.md))
-для запуска на обычном ПК — без ручной установки ROS 2, Gazebo и зависимостей.
-Профили выбирают, что именно поднять.
+This containerizes architecture layers for running on a regular PC without
+manually installing ROS 2, Gazebo, and dependencies. See
+[../docs/architecture/SOLUTION_OVERVIEW.md](../docs/architecture/SOLUTION_OVERVIEW.md).
+Profiles select which part of the stack to start.
 
-| Профиль | Контейнеры | Что делает | Железо |
+| Profile | Containers | Purpose | Hardware |
 |---|---|---|---|
-| `sim`  | `sim` | весь FLAT-стек в симуляции (Gazebo → RTAB-Map → Nav2 → executive), один контейнер | CPU |
-| `edge` | `detector` + `orchestrator` | детектор YOLOE + VLM-оркестратор (edge-сторона) | NVIDIA GPU |
-| `all`  | всё | sim + edge сразу | CPU + GPU (тяжело по RAM) |
+| `sim`  | `sim` | full FLAT stack in simulation (Gazebo -> RTAB-Map -> Nav2 -> executive), one container | CPU |
+| `edge` | `detector` + `orchestrator` | YOLOE detector + VLM orchestrator on the edge side | NVIDIA GPU |
+| `all`  | all | sim + edge together | CPU + GPU (RAM-heavy) |
 
-> Реальный уровень **робота** (CAN/EPOS4/RealSense на Raspberry Pi) в Docker на ПК
-> не воспроизводится — нужно физическое железо (см. [../docs/HIL_BRINGUP_CHECKLIST.md](../docs/HIL_BRINGUP_CHECKLIST.md)).
-> На ПК его роль выполняет контейнер `sim`.
+> The real **robot** layer (CAN/EPOS4/RealSense on Raspberry Pi) cannot be
+> reproduced in Docker on a PC; physical hardware is required. See
+> [../docs/HIL_BRINGUP_CHECKLIST.md](../docs/HIL_BRINGUP_CHECKLIST.md). On a PC,
+> the `sim` container fills that role.
 
-## Требования
+## Requirements
 
-- **Docker** с **Compose v2** и включённым **BuildKit** (по умолчанию в современном Docker —
-  нужен для `Dockerfile.dockerignore`).
-- Для профиля `edge` (GPU): драйвер NVIDIA + **nvidia-container-toolkit** на хосте
-  (`--gpus`/`deploy.devices`). torch ставится из CUDA-индекса `cu124` (проверено на
-  torch 2.6.0+cu124); рантайм CUDA приходит из колёс torch, отдельный CUDA-образ не нужен.
+- **Docker** with **Compose v2** and **BuildKit** enabled. BuildKit is enabled by
+  default in modern Docker and is required for `Dockerfile.dockerignore`.
+- For the `edge` GPU profile: NVIDIA driver + **nvidia-container-toolkit** on the
+  host (`--gpus`/`deploy.devices`). torch is installed from the `cu124` CUDA
+  index (validated with torch 2.6.0+cu124); the CUDA runtime comes from the torch
+  wheels, so a separate CUDA image is not required.
 
-## Быстрый старт
+## Quick Start
 
 ```bash
 cd ar_project/docker
-cp .env.example .env                 # опционально: ROS_DOMAIN_ID / RMW
+cp .env.example .env                 # optional: ROS_DOMAIN_ID / RMW
 
-# Вариант A — весь FLAT в симуляции на ПК:
+# Option A: full FLAT simulation on the PC
 docker compose --profile sim build
-docker compose --profile sim up      # headless (gui:=false), дисплей не нужен
+docker compose --profile sim up      # headless (gui:=false), no display required
 
-# Вариант B — edge (детектор + оркестратор), нужен GPU:
+# Option B: edge detector + orchestrator, GPU required
 docker compose --profile edge build
 docker compose --profile edge up
 ```
 
-Или через `make` (из `ar_project/docker/`): `make build`, `make sim`, `make edge`, `make down`.
+Or use `make` from `ar_project/docker/`: `make build`, `make sim`, `make edge`,
+`make down`.
 
-## Триггер миссии (в контейнере `sim`)
+## Mission Trigger (inside the `sim` container)
 
-После `up` поднимается чистый FLAT. В отдельном терминале:
+After `up`, the clean FLAT stack is running. In a separate terminal:
 
 ```bash
-# заполнить карту в ограниченном мире (даёт SLAM unknown-клетки → frontiers)
+# populate the map in a bounded world (SLAM unknown cells become frontiers)
 docker compose exec sim bash -lc \
-  'ros2 topic pub -r 10 /diff_cont/cmd_vel_unstamped geometry_msgs/msg/Twist "{angular: {z: 0.6}}"'  # Ctrl-C через ~5 с
+  'ros2 topic pub -r 10 /diff_cont/cmd_vel_unstamped geometry_msgs/msg/Twist "{angular: {z: 0.6}}"'  # Ctrl-C after ~5 s
 
-# запустить FLAT-миссию (без VLM)
+# start a FLAT mission without VLM
 docker compose exec sim bash -lc \
   "ros2 action send_goal /seek_object object_tracking_msgs/action/SeekObject \
    '{instruction: \"find bus\", request_id: \"m1\", mission_epoch: 0, allow_vlm: false}' --feedback"
 ```
 
-Полные сценарии (DETECT/APPROACH, режим VLM, мониторинг) — в [../docs/RUNBOOK.md](../docs/RUNBOOK.md).
+Full scenarios (DETECT/APPROACH, VLM mode, monitoring) are documented in
+[../docs/RUNBOOK.md](../docs/RUNBOOK.md).
 
-## Тома и секреты
+## Volumes and Secrets
 
-- **Веса YOLOE** (~600 МБ) не пекутся в образ, а монтируются томом из
-  `object_tracking/object_tracking/object_tracking/model_weights` в share-путь пакета
-  (см. `volumes` сервиса `detector`). Положите туда `yoloe-11s-seg.pt` и `mobileclip_blt.ts`.
-- **Креды VLM** берутся из `object_tracking/planner_orchestrator/vlm.env` через `env_file`
-  (`required: false` — без него оркестратор стартует в mock-режиме). Файл `*.env`
-  в git и в образ **не** попадает.
+- **YOLOE weights** (~600 MB) are not baked into the image. They are mounted from
+  `object_tracking/object_tracking/object_tracking/model_weights` into the
+  package share path (see the `detector` service `volumes`). Put
+  `yoloe-11s-seg.pt` and `mobileclip_blt.ts` there.
+- **VLM credentials** are read from `object_tracking/planner_orchestrator/vlm.env`
+  via `env_file` (`required: false`; without it, the orchestrator starts in mock
+  mode). `*.env` files are not committed to git and are not copied into images.
 
-## Сеть и транспорт
+## Network and Transport
 
-Внутри одного `docker compose` все сервисы в общей сети; DDS-дискавери (`rmw_fastrtps_cpp`)
-работает по умолчанию. Профиль `sim` самодостаточен (все узлы в одном контейнере — связь
-внутрипроцессная). Боевой транспорт Pi↔edge по Wi-Fi — это `rmw_zenoh`
-(см. [../deploy/transport/](../deploy/transport/)); в Docker на одном ПК он не требуется.
+Inside one `docker compose` project, all services share a network and DDS
+discovery (`rmw_fastrtps_cpp`) works by default. The `sim` profile is
+self-contained because all nodes run in one container. The production Pi-edge
+Wi-Fi transport uses `rmw_zenoh` (see [../deploy/transport/](../deploy/transport/));
+it is not required for a single-PC Docker setup.
 
-## Ограничения и заметки
+## Limitations and Notes
 
-- **RAM.** Полный стек (Gazebo + RTAB-Map + Nav2 + YOLOE) прожорлив. На машинах с ~4 ГБ
-  доступной памяти поднимайте профили `sim` и `edge` **по отдельности**, не `all`.
-- **Сборка `sim` — главный риск.** Пакет `ar_project` (ament_cmake) тянет тяжёлые
-  зависимости. CAN-рантайм (`canopen*`) и реальная RealSense нужны только на роботе,
-  поэтому в `Dockerfile` они в `--skip-keys` (симуляция использует gz_ros2_control и
-  камеру Gazebo). Если `rosdep` всё равно споткнётся о недоступный ключ под вашу версию
-  ROS — добавьте его в `--skip-keys`.
-- **Без робота/симуляции** контейнеры `edge` поднимутся и будут ждать ROS-графа —
-  полезны в паре с профилем `sim` или с реальным роботом.
+- **RAM.** The full stack (Gazebo + RTAB-Map + Nav2 + YOLOE) is memory-hungry.
+  On machines with about 4 GB of available RAM, start `sim` and `edge`
+  **separately** rather than using `all`.
+- **The `sim` build is the main risk.** The `ar_project` package (ament_cmake)
+  pulls heavy dependencies. The CAN runtime (`canopen*`) and real RealSense
+  driver are only needed on the robot, so the Dockerfile passes them through
+  `--skip-keys`; the simulation uses `gz_ros2_control` and a Gazebo camera. If
+  `rosdep` still fails on an unavailable key for your ROS version, add it to
+  `--skip-keys`.
+- **Without a robot or simulation**, `edge` containers start and wait for the ROS
+  graph. This is useful together with the `sim` profile or with the real robot.

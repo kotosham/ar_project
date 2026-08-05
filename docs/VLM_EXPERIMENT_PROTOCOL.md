@@ -1,9 +1,9 @@
-# Wheeled-robot experiment protocol
+# Wheeled-Robot Experiment Protocol
 
-Краткий протокол HIL-экспериментов для сравнения двух режимов поиска объекта
-на колесной платформе: `FLAT` и `VLM`.
+This is a concise HIL experiment protocol comparing two object-search modes on a
+wheeled robot platform: `FLAT` and `VLM`.
 
-Сырые логи прикладываются отдельно:
+Raw logs are attached separately:
 
 ```text
 ~/ros2_ws/experiment_logs/vlm_missions/vlm_scene_*.csv
@@ -12,7 +12,7 @@
 ~/ros2_ws/experiment_logs/flat_missions/flat_scene_*.jsonl
 ```
 
-Детальные отладочные проблемы и фиксы вынесены в:
+Debug issues and fixes are tracked in:
 
 ```text
 docs/VLM_HIL_TRIALS_ISSUES_LOG.md
@@ -20,104 +20,99 @@ docs/VLM_HIL_TRIALS_ISSUES_LOG.md
 
 ## System Summary
 
-Прототип - дифференциальный колесный робот с Raspberry Pi 5 на борту и
-edge-ноутбуком. Raspberry Pi запускает моторы/CAN, RealSense, `/scan`, EKF,
-Nav2, `map_odom_relay` и `search_coordinator`. Edge-ноутбук принимает
-`/camera_edge/*`, строит RTAB-Map SLAM, запускает detector, dashboard/logger и
-VLM-orchestrator.
+The prototype is a differential-drive wheeled robot with an onboard Raspberry Pi
+5 and an edge laptop. The Raspberry Pi runs motors/CAN, RealSense, `/scan`, EKF,
+Nav2, `map_odom_relay`, and `search_coordinator`. The edge laptop receives
+`/camera_edge/*`, runs RTAB-Map SLAM, the detector, dashboard/logger, and the VLM
+orchestrator.
 
-`FLAT` режим не использует Qwen. Executive на Pi получает текст цели, включает
-continuous detector `/target_pixel`, при необходимости выполняет фиксированный
-обзор `forward -> right -> left`, затем использует `ExploreFrontier` и Nav2.
-Семантического выбора коридора в этом режиме нет.
+`FLAT` does not use Qwen. The Pi executive receives a target text, runs the
+continuous detector `/target_pixel`, performs a fixed overview
+`forward -> right -> left` when needed, then uses `ExploreFrontier` and Nav2. It
+has no semantic corridor selection.
 
-`VLM` режим использует Qwen как рассуждатель. В модель передаются текст цели,
-Set-of-Mark кадр, SLAM map view, target/context candidates, notes/memory и
-результаты прошлых действий. Qwen выбирает действие: подъезд к видимой цели,
-поворот, короткое движение вперед, semantic corridor exploration, повторный
-детект или завершение.
+`VLM` uses Qwen as a reasoning module. The model receives the target text,
+Set-of-Mark frame, SLAM map view, target/context candidates, notes/memory, and
+previous action results. Qwen selects actions: approach a visible target, turn,
+short forward motion, semantic corridor exploration, detection refresh, or
+finish.
 
-В сценах, где объект изначально не виден, допустимы частичные перекрытия:
-объект может быть найден после смены ракурса или при движении по коридору.
-Это важно для интерпретации: детектор может увидеть часть стула, но без
-валидной depth-точки навигация к нему невозможна.
+In scenes where the target is not initially visible, partial occlusion is allowed:
+the target may be found after a viewpoint change or while moving through a
+corridor. This matters for interpretation: the detector may see part of a chair,
+but without a valid depth point the robot cannot navigate to it.
 
 ## Metrics
 
-`Success` - бинарная метрика на прогон. `1` ставится только если робот достиг
-правильного целевого объекта по ground truth сцены. Для сцен с конкретным
-объектом недостаточно приехать к любому объекту того же класса.
+`Success` is binary per run. It is `1` only if the robot reaches the correct
+ground-truth target object. For scenes with a specific intended object, reaching
+any object of the same class is not enough.
 
-`Progress` - ручная оценка степени решения задачи. Она учитывает не только
-финальное состояние FSM, но и качество стратегии: обнаружение цели, движение в
-правильную область, удержание target lock, корректный выбор коридора и
-достижение нужного объекта.
+`Progress` is a manual estimate of how far the run advanced through the task. It
+captures not only the final FSM state, but also strategy quality: target
+detection, motion toward the correct area, target lock, correct corridor choice,
+and final approach to the intended object.
 
-`D/P time (s)` - характерное время обработки/решения:
+`D/P time (s)` is the characteristic detector/planning processing time:
 
 ```text
 FLAT = mean detector update time from DINO+MobileSAM continuous tracker
 VLM  = mean positive VLM planning latency from orchestrator step_result.latency_ms
 ```
 
-`D/P time` не является полной длительностью миссии. Полное `mission_time_s`
-сохраняется в raw CSV/JSONL и включает повороты, ожидания, Nav2, SLAM/map
-обновления и физическое движение.
+`D/P time` is not full mission duration. Full `mission_time_s` is stored in raw
+CSV/JSONL and includes turns, waits, Nav2, SLAM/map updates, and physical motion.
 
-Важно для FLAT: detector runtime между сценами не обязан расти с семантической
-сложностью. Пустые кадры `Target object not found` и маленькие ложные сегменты
-могут быть быстрее, чем стабильная маска крупного объекта. Поэтому D/P time
-показывает вычислительную стоимость detector update, а не качество поиска.
+For FLAT, detector runtime does not necessarily increase with semantic scene
+complexity. Empty frames and small false segments can be faster than stable masks
+of large objects. Therefore D/P time reflects detector update cost, not search
+quality.
 
 ## Scenes
 
 | Scene | Setup | Target | Ground Truth |
 | ---: | --- | --- | --- |
-| 1 | Visible / reachable | drawer cabinet | Тумба видна прямо перед роботом и достижима по карте. |
-| 2 | Visible / unmapped | office chair | Стул виден в стартовом кадре, но цель находится вне/на границе текущей карты. |
-| 3 | Scan reveal | office chair | Стул не виден впереди, но появляется после простого поворота. |
-| 4 | Corridor search | office chair | Стул не виден initial scan-ом; нужно исследовать левый коридор. |
-| 5 | Semantic prompt | office chair / drawer cabinet | Цель задана загадкой, без прямого имени объекта. |
+| 1 | Visible / reachable | drawer cabinet | Cabinet is directly in front of the robot and reachable on the map. |
+| 2 | Visible / unmapped | office chair | Chair is visible in the starting frame, but the target is outside/on the edge of the current map. |
+| 3 | Scan reveal | office chair | Chair is not visible forward, but appears after a simple turn. |
+| 4 | Corridor search | office chair | Chair is not found by initial scan; the robot must explore the left corridor. |
+| 5 | Semantic prompt | office chair / drawer cabinet | Target is given as a riddle, without the direct object name. |
 
 ## Experiment Notes
 
-Scene 1 проверяет базовый видимый подъезд. Оба режима стабильно доходят до
-тумбы. Это sanity-check detector, depth и Nav2.
+Scene 1 checks the basic visible approach. Both modes reliably reach the drawer
+cabinet. This is a sanity check for detector, depth, and Nav2.
 
-Scene 2 проверяет случай, где цель видна, но начальная карта не позволяет
-прямой подъезд. VLM удерживает смысловую цель и движется в сторону исходно
-видимого стула. FLAT часто теряет цель из-за невалидной depth-точки и после
-обзора подъезжает к случайному другому стулу. Поэтому для FLAT `success=1`
-ставится только одному прогону, который действительно доехал до исходного
-стула в кадре; остальные получают частичный progress за нахождение объекта
-класса `office chair`, но `success=0`.
+Scene 2 checks the case where the target is visible but the initial map does not
+allow direct approach. VLM preserves the semantic target and moves toward the
+initially visible chair. FLAT often loses it because of invalid depth and, after
+overview, approaches a random other chair. Therefore FLAT `success=1` is assigned
+only to the run that actually reached the originally visible chair; the others
+receive partial progress for finding an object of class `office chair`, but
+`success=0`.
 
-Scene 3 проверяет простой поиск поворотом. VLM целенаправленно использует
-обзор и подъезжает к найденному стулу. FLAT тоже получил фиксированный scan для
-честности сравнения; один прогон из-за недокрута ушел в frontier exploration и
-нашел другой стул, поэтому progress снижен, но success оставлен положительным
-для этой сцены.
+Scene 3 checks simple scan-based search. VLM deliberately uses overview and
+approaches the chair it finds. FLAT was also given fixed scan for fair comparison;
+one run under-rotated, entered frontier exploration, and found another chair, so
+progress is reduced while success remains positive for this scene.
 
-Scene 4 проверяет главный случай semantic exploration. VLM выбирает коридор по
-карте и контекстным объектам, затем ищет стул в выбранной области. Один VLM
-прогон завершился неуспехом из-за 2D-детекции без валидной глубины: цель была
-увидена, но не получила надежный `target_nav_lock` и затем потерялась. FLAT в
-успешных прогонах нашел стул случайным блужданием по frontier-ам, а не
-осмысленным выбором левого коридора. Прогоны 2, 3 и 4 FLAT были размечены как
-negative success: робот останавливался у стенки/мебели после ложноположительных
-или одиночных подозрительных target detections.
+Scene 4 checks semantic exploration. VLM chooses the corridor using map and
+context objects, then searches for the chair in the chosen area. One VLM run
+failed because a 2D detection lacked valid depth: the target was seen but did not
+produce reliable `target_nav_lock` and was later lost. FLAT success happened only
+through random frontier wandering rather than meaningful left-corridor choice.
+FLAT runs 2, 3, and 4 are marked as negative success because the robot stopped at
+a wall/furniture after false or single suspicious target detections.
 
-Scene 5 проверяет семантически сложный запрос: цель задается загадкой, а не
-прямым именем класса. VLM использует resolver: переводит описание в
-детекторный запрос с несколькими zero-shot формулировками и затем ведет робота
-к найденной цели; все пять VLM-прогонов размечены как `success=1`,
-`progress=1`. Для FLAT это принципиально слабый случай: режим не имеет
-resolver-а и отправляет текст запроса в детектор как есть. В первых трех
-FLAT-прогонах FSM дошел до `DONE`, но это не засчитано как успех: `DONE` возник
-из-за шума/ложных target detections, которые детектор принял за подходящие цели.
-В прогонах 4-5 робот ушел в случайное frontier-блуждание без нахождения цели.
-Для метрик все пять FLAT-прогонов scene 5 размечены вручную как `success=0`,
-`progress=0.25`.
+Scene 5 checks semantic prompts. The target is described as a riddle instead of a
+direct class name. VLM uses a resolver to convert the description into several
+zero-shot detector phrases and then guides the robot to the found goal. All five
+VLM runs are labeled `success=1`, `progress=1`. FLAT is weak here because it has
+no resolver and sends the raw riddle text to the detector. In the first three
+FLAT runs, FSM reached `DONE`, but this is not counted as success: `DONE` came
+from detector noise/false target detections. In runs 4-5 the robot entered random
+frontier wandering without finding the target. All five FLAT scene 5 runs are
+manually labeled `success=0`, `progress=0.25`.
 
 ## Manual Progress Rules Used
 
@@ -175,12 +170,12 @@ progress = [1.00, 1.00, 1.00, 1.00, 1.00]
 
 ## Interpretation
 
-FLAT быстрее на уровне detector update, но в сложных сценах его поведение
-зависит от геометрии, случайного frontier exploration и валидности depth-точки.
-Если цель видна как 2D-кандидат, но depth невалидна, FLAT не умеет рассуждать о
-том, куда лучше двигаться для раскрытия карты именно относительно этой цели.
+FLAT is faster at the detector-update level, but in complex scenes its behavior
+depends on geometry, random frontier exploration, and valid depth. If the target
+is visible as a 2D candidate but depth is invalid, FLAT cannot reason about where
+to move to reveal the map relative to that target.
 
-VLM медленнее на каждый decision/planning step, но лучше сохраняет смысловую
-цель, использует карту и контекстные объекты как подсказки для выбора коридора,
-а не как точки притяжения. Поэтому в сценах 2 и 4 рост D/P time компенсируется
-более высоким success/progress.
+VLM is slower per decision/planning step, but better preserves the semantic goal,
+uses map and context objects to select a corridor, and avoids treating context
+objects as approach targets. In scenes 2 and 4, higher D/P time is offset by
+higher success/progress.

@@ -234,9 +234,9 @@ class MissionDashboard(Node):
 
 
 _PAGE = r"""<!DOCTYPE html>
-<html lang="ru"><head><meta charset="utf-8">
+<html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Монитор VLM-робота</title>
+<title>VLM Robot Monitor</title>
 <style>
 :root{--bg:#101418;--card:#1a2026;--line:#2a333c;--fg:#dbe4ec;--dim:#8b98a5;
  --ok:#33c06e;--warn:#e2b93b;--stale:#e28f3b;--err:#e25555;color-scheme:dark}
@@ -271,80 +271,80 @@ h2{font-size:14px;color:var(--dim);text-transform:uppercase;letter-spacing:.06em
 .mono{font-family:ui-monospace,Consolas,monospace}
 </style></head><body>
 <div class="top">
-  <h1>Монитор VLM-робота</h1>
-  <span class="chip" id="mstate">FSM: —</span>
-  <span class="chip" id="mtask">миссия: —</span>
-  <span class="chip"><small>связь с Pi:</small> <span id="link">—</span></span>
+  <h1>VLM Robot Monitor</h1>
+  <span class="chip" id="mstate">FSM: -</span>
+  <span class="chip" id="mtask">mission: -</span>
+  <span class="chip"><small>Pi link:</small> <span id="link">-</span></span>
 </div>
 
 <div class="cols">
 <div>
-  <h2>Состояние компонентов робота</h2>
+  <h2>Robot Component Status</h2>
   <div class="grid" id="comps"></div>
-  <h2>Heartbeat процессов</h2>
+  <h2>Process Heartbeats</h2>
   <div class="grid" id="beats"></div>
 </div>
 <div>
-  <h2>Что думает и делает VLM</h2>
+  <h2>VLM Thoughts and Actions</h2>
   <div id="feed"></div>
-  <h2>Что видит робот</h2>
+  <h2>Robot View</h2>
   <div class="imgs">
-    <figure><img id="som" alt="нет кадра"><figcaption id="somc">Set-of-Mark: нет кадра</figcaption></figure>
-    <figure><img id="map" alt="нет карты"><figcaption id="mapc">Карта для VLM: нет данных</figcaption></figure>
+    <figure><img id="som" alt="no frame"><figcaption id="somc">Set-of-Mark: no frame</figcaption></figure>
+    <figure><img id="map" alt="no map"><figcaption id="mapc">VLM map: no data</figcaption></figure>
   </div>
 </div>
 </div>
 
 <script>
-const RU={realsense:"Камера RealSense",ekf_odometry:"EKF (одометрия)",
- scan:"Лазер-скан (/scan)",control_epos4:"Приводы EPOS4/CAN",
- wheel_odometry:"Колёсная одометрия",slam_correction:"SLAM-коррекция map→odom",
- slam_map:"SLAM-карта (/map)",detection_stream:"Детекции (/target_pixel)",
- cmd_vel:"Команды движения",search_coordinator:"Executive FSM (Pi)",
- planner_orchestrator:"VLM-оркестратор",detector:"Детектор YOLOE",
- nav2:"Nav2 (навигация)",twist_mux:"Twist mux",collision_monitor:"Collision Monitor",
- cmd_vel_watchdog:"Watchdog cmd_vel",slam_rtabmap:"RTAB-Map SLAM (процесс)"};
-const LVL={0:"OK",1:"ВНИМАНИЕ",2:"ОТКАЗ",3:"НЕТ ДАННЫХ"};
+const LABELS={realsense:"RealSense Camera",ekf_odometry:"EKF Odometry",
+ scan:"Laser Scan (/scan)",control_epos4:"EPOS4/CAN Drives",
+ wheel_odometry:"Wheel Odometry",slam_correction:"SLAM map->odom Correction",
+ slam_map:"SLAM Map (/map)",detection_stream:"Detections (/target_pixel)",
+ cmd_vel:"Motion Commands",search_coordinator:"Executive FSM (Pi)",
+ planner_orchestrator:"VLM Orchestrator",detector:"YOLOE Detector",
+ nav2:"Nav2 Navigation",twist_mux:"Twist mux",collision_monitor:"Collision Monitor",
+ cmd_vel_watchdog:"cmd_vel Watchdog",slam_rtabmap:"RTAB-Map SLAM Process"};
+const LVL={0:"OK",1:"WARN",2:"FAIL",3:"NO DATA"};
 function el(id){return document.getElementById(id)}
 function esc(s){return String(s??"").replace(/[&<>]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]))}
-function fmtT(ts){const d=new Date(ts*1000);return d.toLocaleTimeString('ru-RU')}
+function fmtT(ts){const d=new Date(ts*1000);return d.toLocaleTimeString('en-US')}
 function evLine(e){
  const t=`<span class="t">${e.stamp?fmtT(e.stamp):""}</span>`;
  switch(e.event){
-  case"mission_start":return t+`<span class="tag step">СТАРТ</span> цель «${esc(e.target)}», клиент ${esc(e.client)} (creds: ${esc(e.creds)})`;
-  case"mission_end":return t+`<span class="tag step">ФИНИШ</span> ${e.steps} шагов${e.degraded?' — <b class="tag deg">DEGRADED (FLAT fallback)</b>':""}`;
-  case"observe":{const d=(e.detections||[]).map(x=>`${esc(x.label)} ${x.score}@${x.distance_m}м`).join(", ");
-   return t+`<span class="tag observe">ВИЖУ</span> шаг ${e.step}: ${e.n_detections} объект(ов)${d?" — "+d:""}; карта: ${e.map==="yes"?"да":"нет"} → спрашиваю ${esc(e.client)}`}
+  case"mission_start":return t+`<span class="tag step">START</span> target "${esc(e.target)}", client ${esc(e.client)} (creds: ${esc(e.creds)})`;
+  case"mission_end":return t+`<span class="tag step">FINISH</span> ${e.steps} step(s)${e.degraded?' - <b class="tag deg">DEGRADED (FLAT fallback)</b>':""}`;
+  case"observe":{const d=(e.detections||[]).map(x=>`${esc(x.label)} ${x.score}@${x.distance_m}m`).join(", ");
+   return t+`<span class="tag observe">OBSERVE</span> step ${e.step}: ${e.n_detections} object(s)${d?" - "+d:""}; map: ${e.map==="yes"?"yes":"no"} -> asking ${esc(e.client)}`}
   case"plan":{const a=(e.actions||[]).map(x=>`<b>${esc(x.action)}</b>${x.rationale?" <i>("+esc(x.rationale)+")</i>":""}`).join("; ");
-   return t+`<span class="tag plan">РЕШИЛ</span> шаг ${e.step} (${e.latency_ms} мс): ${a||"— пусто"}`}
-  case"plan_failed":return t+`<span class="tag fail">ОШИБКА VLM</span> шаг ${e.step}: ${esc(e.error)} (breaker ${e.cb_open?"ОТКРЫТ":"закрыт"})`;
-  case"step_start":return t+`<span class="tag step">ДЕЛАЮ</span> шаг ${e.step}: <b>${esc(e.action)}</b>${e.rationale?" — "+esc(e.rationale):""}`;
-  case"step_result":return t+`<span class="tag ${e.result==="ok"?"step":"fail"}">${e.result==="ok"?"ГОТОВО":"ПРОВАЛ"}</span> шаг ${e.step}: ${esc(e.action)} за ${e.duration_s}с`;
+   return t+`<span class="tag plan">PLAN</span> step ${e.step} (${e.latency_ms} ms): ${a||"- empty"}`}
+  case"plan_failed":return t+`<span class="tag fail">VLM ERROR</span> step ${e.step}: ${esc(e.error)} (breaker ${e.cb_open?"OPEN":"closed"})`;
+  case"step_start":return t+`<span class="tag step">DOING</span> step ${e.step}: <b>${esc(e.action)}</b>${e.rationale?" - "+esc(e.rationale):""}`;
+  case"step_result":return t+`<span class="tag ${e.result==="ok"?"step":"fail"}">${e.result==="ok"?"DONE":"FAILED"}</span> step ${e.step}: ${esc(e.action)} in ${e.duration_s}s`;
   case"detect_all":{const o=(e.objects||[]).map(x=>`${esc(x.label)}(${x.score})`).join(", ");
-   return t+`<span class="tag observe">ОБЗОР</span> в кадре: ${o||"ничего"}`}
-  case"degraded":return t+`<span class="tag deg">ДЕГРАДАЦИЯ</span> ${esc(e.detail)}`;
-  case"notes":return t+`<span class="tag note">ПАМЯТЬ</span> ${esc(e.summary||"")} <span class="mono">[${(e.facts||[]).length} фактов, ~${e.token_estimate} ток.]</span>`;
+   return t+`<span class="tag observe">SCAN</span> frame objects: ${o||"none"}`}
+  case"degraded":return t+`<span class="tag deg">DEGRADED</span> ${esc(e.detail)}`;
+  case"notes":return t+`<span class="tag note">MEMORY</span> ${esc(e.summary||"")} <span class="mono">[${(e.facts||[]).length} facts, ~${e.token_estimate} tok.]</span>`;
   default:return t+`<span class="tag note">${esc(e.event)}</span> ${esc(JSON.stringify(e))}`}
 }
 let lastSeq=-1;
 function render(s){
  const m=s.mission||{};
- el("mstate").innerHTML=`FSM: <b>${esc(m.state||"—")}</b>`+(m.active_subtask?` <small>(${esc(m.active_subtask)})</small>`:"");
- el("mtask").innerHTML=`миссия: <b>${esc(m.instruction||"—")}</b>`+(m.outcome?` <small>→ ${esc(m.outcome)}</small>`:"")+(m.progress!=null?` <small>${Math.round(m.progress*100)}%</small>`:"");
+ el("mstate").innerHTML=`FSM: <b>${esc(m.state||"-")}</b>`+(m.active_subtask?` <small>(${esc(m.active_subtask)})</small>`:"");
+ el("mtask").innerHTML=`mission: <b>${esc(m.instruction||"-")}</b>`+(m.outcome?` <small>-> ${esc(m.outcome)}</small>`:"")+(m.progress!=null?` <small>${Math.round(m.progress*100)}%</small>`:"");
  const link=el("link");
- if(s.link_age_s==null){link.textContent="нет данных";link.className="bad"}
- else{link.textContent=s.link_age_s+"с назад";link.className=s.link_age_s>5?"bad":""}
+ if(s.link_age_s==null){link.textContent="no data";link.className="bad"}
+ else{link.textContent=s.link_age_s+"s ago";link.className=s.link_age_s>5?"bad":""}
  el("comps").innerHTML=(s.components||[]).map(c=>{
   const kv=Object.entries(c.values||{}).filter(([k])=>k!=="detail")
    .map(([k,v])=>`${esc(k)}=${esc(v)}`).join(" · ");
   const det=(c.values||{}).detail||"";
-  return `<div class="card"><div class="nm"><span class="dot lv${c.level}"></span>${esc(RU[c.name]||c.name)} <small style="color:var(--dim)">${LVL[c.level]||c.level}</small></div>
+  return `<div class="card"><div class="nm"><span class="dot lv${c.level}"></span>${esc(LABELS[c.name]||c.name)} <small style="color:var(--dim)">${LVL[c.level]||c.level}</small></div>
   <div class="msg">${esc(c.message)}</div>${det?`<div class="kv">${esc(det)}</div>`:""}${kv?`<div class="kv mono">${kv}</div>`:""}</div>`}).join("");
  el("beats").innerHTML=Object.entries(s.heartbeats||{}).map(([n,b])=>{
   const lv=b.status==="OK"?0:(b.status==="DEGRADED"?1:2);
   const stale=b.age_s>3;
-  return `<div class="card"><div class="nm"><span class="dot lv${stale?3:lv}"></span>${esc(RU[n]||n)} <small style="color:var(--dim)">${stale?"МОЛЧИТ "+b.age_s+"с":esc(b.status)}</small></div>
-  <div class="kv mono">cpu=${b.cpu_load} · latency=${b.latency_ms}мс · epoch=${b.epoch}</div></div>`}).join("");
+  return `<div class="card"><div class="nm"><span class="dot lv${stale?3:lv}"></span>${esc(LABELS[n]||n)} <small style="color:var(--dim)">${stale?"STALE "+b.age_s+"s":esc(b.status)}</small></div>
+  <div class="kv mono">cpu=${b.cpu_load} · latency=${b.latency_ms}ms · epoch=${b.epoch}</div></div>`}).join("");
  const feed=el("feed");
  const act=s.activity||[];
  const last=act.length?act[act.length-1].seq:-1;
@@ -353,9 +353,9 @@ function render(s){
   feed.innerHTML=act.slice().reverse().map(e=>`<div class="ev">${evLine(e)}</div>`).join("");
  }
  if(s.setofmark_age_s!=null){el("som").src="/setofmark.jpg?t="+Date.now();
-  el("somc").textContent=`Set-of-Mark (кадр с метками для VLM), ${s.setofmark_age_s}с назад`}
+  el("somc").textContent=`Set-of-Mark frame for VLM, ${s.setofmark_age_s}s ago`}
  if(s.map_age_s!=null){el("map").src="/map.jpg?t="+Date.now();
-  el("mapc").textContent=`Карта, отправленная VLM, ${s.map_age_s}с назад`}
+  el("mapc").textContent=`Map sent to VLM, ${s.map_age_s}s ago`}
 }
 function connect(){
  const es=new EventSource("/events");

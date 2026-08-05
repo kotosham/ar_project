@@ -1,145 +1,173 @@
-> **Поправки верификации (имеют приоритет над числами в теле ниже).** По итогам состязательной проверки против кода:
-> - **Aligned depth — 640×480, не 424×240.** При `align_depth.enable=true` нативный depth-профиль 424×240 репроецируется в color-сетку 640×480 (и `target_pixel_to_goal` берёт color-интринсики). Сырой кадр = 640·480·2 = 614 400 B.
-> - **RVL даёт ~3:1 без потерь** (не 10–20×). Плотный 640×480 16UC1 RVL ≈ **50–70 КБ**; 10×+ — только на разрежённой глубине. Значит: depth-keyframe ≈ 50–70 КБ, полный `DetectTarget`-request (L4) ≈ **75–115 КБ**, пик/DETECT ≈ 75–115 КБ, совмещённый пик ≈ 80–130 КБ. Если полоса критична — слать нативный 424×240 с ре-выравниванием на EDGE.
-> - **`/scan` через `depthimage_to_laserscan` — НОВЫЙ компонент.** Сейчас его в репозитории нет; `local_costmap` obstacle-source — PointCloud2 `/camera/camera/depth/color/points_rgbd` (локально). В `robust` он заменяется на локальный `/scan`.
-> - **L6 `map→odom` — тип `ar_project_msgs/MapOdomCorrection`** (TransformStamped + covariance + seq + relocalized), не `PoseWithCovarianceStamped`.
-> - **Самое узкое окно для chrony — EKF `transform_timeout` 0.1 c** (уже, чем TF 0.2 c / depth-match 0.35 c / pixel-age 1.5 c).
-> - **Цель считается во фрейме `map`** → зависит от здоровья `map_odom_relay`: при длительной потере линка некорректируемый дрейф одометрии делает 3D-цель всё менее точной → ограничивать радиус/время исследования и уходить в SAFE_STOP по бюджету дрейфа.
-> - JPEG q80 640×480 ≈ 25–45 КБ — это ~20–37× (не 15–25×).
+> **Verification corrections. These values override the body below.**
+> - **Aligned depth is 640x480, not 424x240.** With `align_depth.enable=true`, the
+>   native 424x240 depth profile is reprojected into the 640x480 color grid, and
+>   `target_pixel_to_goal` uses color intrinsics. A raw frame is
+>   640 * 480 * 2 = 614400 B.
+> - **RVL gives about 3:1 lossless compression**, not 10-20x. Dense 640x480
+>   16UC1 RVL is about **50-70 KB**; 10x+ only applies to sparse depth. Therefore
+>   a depth keyframe is about 50-70 KB, a full L4 `DetectTarget` request is about
+>   **75-115 KB**, DETECT peak is about 75-115 KB, and combined peak is about
+>   80-130 KB. If bandwidth becomes critical, send native 424x240 and realign on
+>   EDGE.
+> - **`/scan` via `depthimage_to_laserscan` is a NEW component.** It is not
+>   present in the repository yet. The current `local_costmap` obstacle source is
+>   PointCloud2 `/camera/camera/depth/color/points_rgbd` locally. In `robust`, this
+>   is replaced by local `/scan`.
+> - **L6 `map->odom` uses `ar_project_msgs/MapOdomCorrection`** (TransformStamped
+>   + covariance + seq + relocalized), not `PoseWithCovarianceStamped`.
+> - **The tightest chrony window is EKF `transform_timeout` = 0.1 s**, tighter
+>   than TF 0.2 s, depth-match 0.35 s, and pixel-age 1.5 s.
+> - **The target is represented in the `map` frame**, so it depends on
+>   `map_odom_relay` health. During long link loss, uncorrected odometry drift
+>   makes the 3D target less accurate; limit exploration radius/time and enter
+>   SAFE_STOP when the drift budget is exceeded.
+> - JPEG q80 640x480 is about 25-45 KB, or roughly 20-37x smaller than raw, not
+>   15-25x.
 
-# Контракты передачи данных Pi <-> ПК
+# Pi <-> PC Data Contracts
 
-Раздел описывает **все** каналы передачи данных целевой архитектуры, проходящие через Wi-Fi между ROBOT (Raspberry Pi 5, без GPU) и EDGE/PC (GPU-бокс). Транспорт — `rmw_zenoh` (один systemd-роутер `zenohd` на EDGE; fallback — Fast DDS LARGE_DATA + Discovery Server), multicast отключён, размер сокет-буферов 12 МБ, синхронизация часов через chrony на всех хостах. Базовый принцип, на котором построены все контракты: **реактивный контур (EKF, Nav2, /scan, control, safety) НИКОГДА не ждёт ответа по Wi-Fi**; через линк ходят только редкие, малые по объёму или событийные сообщения, а тяжёлые потоки (PointCloud2, сырые RGB/depth) через Wi-Fi не передаются принципиально.
+This document describes every target-architecture data channel that crosses
+Wi-Fi between ROBOT (Raspberry Pi 5, no GPU) and EDGE/PC (GPU box). Transport is
+`rmw_zenoh` with a single `zenohd` systemd router on EDGE; fallback is Fast DDS
+LARGE_DATA + Discovery Server. Multicast is disabled, socket buffers are 12 MB,
+and all hosts use chrony. The core principle is: **the reactive loop (EKF, Nav2,
+/scan, control, safety) NEVER waits for Wi-Fi**. Only rare, small, low-rate, or
+event-driven messages cross the link. Heavy streams such as PointCloud2 and raw
+RGB/depth never cross Wi-Fi.
 
-Все идентификаторы (topic/action/service, имена узлов, параметры) даны на английском. Числа по размеру/полосе/задержке приведены для целевых профилей RealSense D435i: RGB `640x480x15`, depth `424x240x15` aligned-to-color (`16UC1`, миллиметры), как зафиксировано в `realsense_rgbd_pi.launch.py`.
+All identifiers (topics, actions, services, node names, parameters) are in
+English. Size, bandwidth, and latency estimates target RealSense D435i profiles:
+RGB `640x480x15`, depth `424x240x15` aligned to color (`16UC1`, millimeters), as
+configured in `realsense_rgbd_pi.launch.py`.
 
----
+## 1. Per-Link Summary
 
-## 1. Сводная таблица по каждому каналу (per-link)
+QoS abbreviations: R=Reliable, BE=Best-Effort, TL=Transient-Local, V=Volatile,
+KL=Keep-Last(N), KA=Keep-All. Latency is estimated end-to-end over Wi-Fi,
+including serialization and RTT, excluding inference/VLM time where noted.
+Clocks are synchronized by chrony, with offset much smaller than 0.2 s.
 
-Сокращения QoS: R=Reliable, BE=Best-Effort, TL=Transient-Local, V=Volatile, KL=Keep-Last(N), KA=Keep-All. Задержки — оценка end-to-end по Wi-Fi (включая сериализацию + RTT, исключая инференс/VLM, который указан отдельно). Часы синхронизированы chrony, оффсет << 0.2 c.
+| # | Channel | Direction | Interface | Message / key fields | Encoding | Size | Rate | QoS | Bandwidth | Link latency | Degradation behavior |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| **L1** | `SeekObject` | operator -> Pi | action `/seek_object` | goal: instruction, mode `{flat|vlm}`, target_desc, mission_epoch; feedback: phase, progress, committed_subgoal; result: outcome, note | CDR text | goal ~200-600 B, feedback ~150 B, result ~200 B | event, feedback 1-2 Hz | R,V,KL(10), feedback deadline 2 s | <1 KB/s | 10-40 ms | Link loss does not cancel the mission. Pi executive continues the committed subgoal; operator sees link-lost feedback timeout. |
+| **L2** | `plan-request` | Pi executive -> EDGE planner | action `/plan_request` | instruction, mission_epoch, history_digest, compact frontier list, detection summary, notes refs | CDR, compact list, no costmap | ~2-8 KB | commit-point, every 5-30 s | R,V,KL(1), deadline = measured VLM p99 | idle ~0 | 10-40 ms + VLM seconds | single-in-flight + UUID idempotency; timeout/circuit-breaker keeps executive in FLAT. |
+| **L3** | `plan-decision` | EDGE -> Pi | action result/feedback | PlanDecision with mission_epoch, plan_id, SubtaskNode tree, note_to_self, confidence, stamp | CDR structured tool call; VLM returns indices, not coordinates | ~0.5-4 KB | response to L2 | R,V,KL(1) | peak 0.5-4 KB/cycle | 10-40 ms after VLM | stale epoch is dropped; adoption only at commit point; timeout continues current subtask then degrades to FLAT. |
+| **L4** | `DetectTarget request` | Pi -> EDGE | action `/detect_target` or service | compressed RGB, compressed depth, CameraInfo optionally once, prompt, stamp, frame_id, req_id | RGB JPEG q80; depth RVL/PNG 16UC1; CDR wrapper | RGB ~25-45 KB, depth per correction above | event keyframe, 0.2-2 Hz while searching | R,V,KL(1), deadline 0.5 s | idle 0, peak ~75-115 KB/request | 30-90 ms + GPU inference | stale/lost request yields no pixel; executive continues exploration. |
+| **L5** | `DetectTarget result` | EDGE -> Pi | action result | u, v, depth_m, score, class_label, frame_id, stamp, req_id, found | CDR numeric | ~120-250 B | response to L4 | R,V,KL(1), deadline 0.5 s | <1 KB/s | 10-30 ms | req_id mismatch or stale stamp is dropped. Approach never declares reached from a stale pixel. |
+| **L6** | `map->odom correction` | EDGE SLAM -> Pi relay | topic `/map_odom_correction` | `ar_project_msgs/MapOdomCorrection`: TransformStamped + covariance + seq + relocalized | CDR, low-rate correction, not TF stream | ~350-500 B | 1-2 Hz | R,TL,KL(1), deadline 2 s | ~0.5-1 KB/s | 10-30 ms | relay holds last-good, gates jumps/covariance, drops stale stamps, rebroadcasts `map->odom` locally within transform tolerance. |
+| **H1** | Pi heartbeat | Pi -> EDGE | topic | light Header/DiagnosticStatus | CDR minimal | ~60-120 B | 2 Hz | BE,V,KL(1), deadline 1 s | <0.5 KB/s | <10 ms | EDGE marks Pi offline; mission is not affected. |
+| **H2** | EDGE heartbeat | EDGE -> Pi | topic | same as H1 | CDR minimal | ~60-120 B | 2 Hz | BE,V,KL(1), deadline 1 s | <0.5 KB/s | <10 ms | Pi marks edge unavailable, freezes SLAM corrections, and VLM mode degrades to FLAT. |
+| **H3** | planner-ready heartbeat | EDGE -> Pi | topic `/hb/planner` | state `{ready|busy|circuit_open}`, p99_ms, seq | CDR minimal | ~80-150 B | 1 Hz | BE,V,KL(1), deadline 2 s | <0.5 KB/s | <10 ms | Executive stops sending new plan requests until recovered. |
+| **L7** | notes digest | mostly local on EDGE, optional EDGE -> Pi digest | topic `/mission/notes_digest` | digest, mission_epoch, seq | CDR text | ~0.5-4 KB | rare, <=0.2 Hz | R,TL,KL(1) | <1 KB/s | 10-40 ms | If absent, executive uses only local mission state. |
+| **L8** | aggregated diagnostics | Pi <-> EDGE | topic `/diagnostics_agg` | `diagnostic_msgs/DiagnosticArray` | CDR aggregated, not raw high-rate diagnostics | ~1-4 KB | 1 Hz | R,V,KL(5), deadline 5 s | ~2-4 KB/s | 20-60 ms | Only monitoring is affected. |
 
-| # | Канал | Направление | Тип интерфейса | Тип сообщения / ключевые поля | Кодирование (ради скорости) | Размер | Частота | QoS | Полоса | Задержка линка | Поведение при деградации |
-|---|-------|-------------|----------------|-------------------------------|------------------------------|--------|---------|-----|--------|----------------|--------------------------|
-| **L1** | `SeekObject` | operator -> Pi | **action** (`/seek_object`) | goal: `string instruction`, `string mode{flat\|vlm}`, `string target_desc`, `uint32 mission_epoch`; feedback: `string phase`, `float32 progress`, `string committed_subgoal`; result: `uint8 outcome`, `string note` | CDR (текст), без сжатия | goal ~200–600 B, feedback ~150 B, result ~200 B | событийно (goal редко); feedback 1–2 Гц | R, V, KL(10), deadline 2 s (feedback), liveliness AUTOMATIC lease 5 s | < 1 КБ/с | 10–40 мс | потеря линка не отменяет миссию: executive на Pi автономен; feedback-таймаут — оператор видит «link lost», робот продолжает committed subgoal |
-| **L2** | `plan-request` | Pi executive -> EDGE Planner Orchestrator | **action** (`/plan_request`, preemptable) | goal: `string instruction`, `uint32 mission_epoch`, `string history_digest`, `FrontierCandidate[] frontiers` (id, centroid x/y, size, info_gain), `DetectionSummary[] seen`, `string[] notes_ref`; feedback: `string status{queued\|inflight\|streaming}`; result: см. L3 | CDR; frontiers — компактный список (НЕ costmap), notes по reference-id, не текст | goal ~2–8 КБ (десятки frontiers + дайджест) | событийно, на commit-point; ~раз в 5–30 c | R, V, KL(1), deadline = p99_VLM (измеренный), liveliness lease 10 s | idle ~0; пик 2–8 КБ/цикл | линк 10–40 мс + **VLM secs** (вне реактивного пути) | single-in-flight + UUID idempotency; timeout по измеренному p99 + circuit-breaker; при отказе — executive остаётся в FLAT |
-| **L3** | `plan-decision` | EDGE -> Pi | **action result/feedback** того же `/plan_request` (streaming) | `PlanDecision`: `uint32 mission_epoch`, `uuid plan_id`, `SubtaskNode[] tree` (skill enum, `frontier_id` ИЛИ `approach_target` — выбор ИЗ присланного списка, params), `string note_to_self`, `float32 confidence`, `builtin_interfaces/Time stamp` | CDR; **enum/structured tool-call**: VLM возвращает только индексы из реального списка, не координаты | ~0.5–4 КБ | событийно (ответ на L2) | R, V, KL(1) | пик 0.5–4 КБ/цикл | линк 10–40 мс (после VLM) | устаревший `mission_epoch` -> отбрасывается; адопция только в commit-point; при таймауте — продолжается текущий subtask, затем degrade в FLAT |
-| **L4** | `DetectTarget request` | Pi -> EDGE | **action** (`/detect_target`) ИЛИ **service** (см. §2.2) | goal: `sensor_msgs/CompressedImage rgb`, `sensor_msgs/CompressedImage depth`, `sensor_msgs/CameraInfo info` (опц., один раз), `string prompt`, `builtin_interfaces/Time stamp`, `string frame_id`, `uuid req_id` | **RGB: JPEG q80** (640x480); **depth: RVL или PNG для 16UC1** (424x240, mm); intrinsics — **один раз** на сессию; CDR-обёртка | RGB ~25–45 КБ; depth ~8–25 КБ; info ~0.5 КБ (однократно) | **событийно**, 1 keyframe на цикл детекции (НЕ поток); ~0.2–2 Гц при поиске | R, V, KL(1), deadline 0.5 s | idle 0; пик ~35–70 КБ/детекцию | линк сериализация+RTT 30–90 мс + инференс на GPU | при stale/потере — детектор не выдаёт пиксель; executive продолжает explore (FLAT) |
-| **L5** | `DetectTarget result` | EDGE -> Pi | **action result** `/detect_target` | `DetectionResult`: `float32 u`, `float32 v`, `float32 depth_m`, `float32 score`, `string class_label`, `string frame_id`, `builtin_interfaces/Time stamp`, `uuid req_id`, `bool found` | CDR, чистые числа | ~120–250 B | событийно (ответ на L4) | R, V, KL(1), deadline 0.5 s | < 1 КБ/с | линк 10–30 мс | `req_id` mismatch / stale stamp -> отбрасывается; **approach НЕ объявляет reached по устаревшему пикселю** (см. §2.4) |
-| **L6** | `map->odom correction` | EDGE SLAM (RTAB-Map) -> Pi `map_odom_relay` | **topic** (`/map_odom_correction`) | `geometry_msgs/PoseWithCovarianceStamped` (поправка map->odom), `header.stamp`, `header.frame_id=map`, `child=odom` (в поле или конвенция) | CDR; **НЕ TF-поток**, низкочастотная поправка | ~350–500 B | 1–2 Гц (low-rate) | R, TL, KL(1), deadline 2 s, liveliness lease 5 s | ~0.5–1 КБ/с | 10–30 мс | `map_odom_relay` держит last-good, гейтит скачок/ковариацию, **отбрасывает stale stamps**, ребродкастит map->odom локально < `transform_tolerance` 0.2 s |
-| **H1** | heartbeat Pi-alive | Pi -> EDGE | **topic** (`/hb/pi`) | `std_msgs/Header` (stamp) или `diagnostic_msgs/DiagnosticStatus` lite: `uint8 level`, `string node`, seq | CDR минимальный | ~60–120 B | 2 Гц | BE, V, KL(1), deadline 1 s, liveliness AUTOMATIC lease 2 s | < 0.5 КБ/с | < 10 мс | пропуск deadline -> EDGE метит Pi offline (логирование/диагностика), миссия не страдает |
-| **H2** | heartbeat EDGE-alive | EDGE -> Pi | **topic** (`/hb/edge`) | как H1 | CDR минимальный | ~60–120 B | 2 Гц | BE, V, KL(1), deadline 1 s, liveliness lease 2 s | < 0.5 КБ/с | < 10 мс | пропуск -> Pi помечает edge недоступным -> VLM mode **degrade в FLAT**, SLAM-поправки замораживаются (last-good в relay) |
-| **H3** | heartbeat VLM/Planner-ready | EDGE Planner Orchestrator -> Pi | **topic** (`/hb/planner`) | lite-status: `uint8 state{ready\|busy\|circuit_open}`, `float32 p99_ms`, seq | CDR минимальный | ~80–150 B | 1 Гц | BE, V, KL(1), deadline 2 s, liveliness lease 4 s | < 0.5 КБ/с | < 10 мс | `circuit_open`/пропуск -> executive не шлёт новые `plan-request`, остаётся в FLAT до восстановления |
-| **L7** | semantic-memory / notes sync | (преим. LOCAL на EDGE) EDGE -> Pi только digest | **topic** (`/mission/notes_digest`) опц. | `string digest` (компактное summary, NOTES self-written), `uint32 mission_epoch`, seq | CDR текст; **полные frames/embeddings остаются на EDGE** | ~0.5–4 КБ | редко, на replan (≤ 0.2 Гц) | R, TL, KL(1) | < 1 КБ/с (всплески) | 10–40 мс | если не передаётся — executive использует только локальное mission-state; деградация прозрачна |
-| **L8** | `/diagnostics` (aggregated) | Pi <-> EDGE (двунаправленно, подписка) | **topic** (`/diagnostics_agg`) | `diagnostic_msgs/DiagnosticArray`: status[] (level, name, message, key/value) | CDR; **агрегированный** (diagnostic_aggregator), НЕ сырой высокочастотный `/diagnostics` | ~1–4 КБ | 1 Гц | R, V, KL(5), deadline 5 s | ~2–4 КБ/с | 20–60 мс | потеря -> только мониторинг страдает; реактив не зависит |
+L4 should be an **action** rather than a service in production, because it is
+preemptable, can carry feedback, and supports UUID idempotency on mission epoch
+changes. A service is acceptable only for synchronous test stands.
 
-> Примечание по L4: предпочтителен **action** (а не service), чтобы запрос был preemptable, нёс feedback и поддерживал UUID-идемпотентность при смене `mission_epoch`. Service допустим только в синхронном тестовом стенде.
+## 2. Keyframe and Format Decisions
 
----
+### 2.1 RGB Keyframe: JPEG q80, 640x480
 
-## 2. Решения по keyframe / формату
+- Format: `sensor_msgs/CompressedImage`, `format="jpeg"`, q80 quality. Source is
+  the `640x480x15` color profile.
+- Why: q80 is enough for open-vocabulary detection (YOLOE/GroundingDINO) and is
+  typically 25-45 KB. q90+ increases bytes by 50-80% with little detection gain.
+- Pi encoding: libjpeg-turbo on ARM, O(W*H), about 3-6 ms on Pi 5 for 640x480.
+  This is event keyframe work, not streaming work.
+- Edge decode: O(W*H), about 1-2 ms on CPU or below 1 ms with nvJPEG.
+- No pre-send downscale: 640x480 keeps small target coverage while q80 already
+  fits the bandwidth budget.
 
-### 2.1 RGB keyframe — JPEG q80, 640x480
+### 2.2 Depth Keyframe: RVL Preferred, PNG Fallback
 
-- **Формат:** `sensor_msgs/CompressedImage`, `format="jpeg"`, качество **q80**. Источник — color-профиль `640x480x15`.
-- **Почему:** JPEG q80 для типичной сцены 640x480 даёт **~25–45 КБ** (коэффициент сжатия ~15–25x против сырых 640·480·3 = 921 600 B). Визуального качества q80 более чем достаточно для open-vocab детектора (YOLOE / GroundingDINO). Поднимать до q90+ невыгодно: +50–80% байт ради нерелевантной для детекции точности.
-- **Кодирование на Pi:** аппаратного JPEG-энкодера в пайплайне не предполагаем -> libjpeg-turbo (SIMD на ARM). Сложность **O(W·H)**; на Pi 5 ~**3–6 мс** на кадр 640x480. Это одноразовая операция на keyframe (НЕ на поток), поэтому нагрузка незаметна.
-- **Decode на GPU-боксе:** O(W·H), ~1–2 мс (CPU) или nvJPEG на GPU < 1 мс.
-- **Downscale:** до отправки кадр остаётся 640x480 (детектору нужен достаточный охват мелких целей); дальнейший даунскейл не делаем, т.к. q80 уже укладывается в бюджет полосы.
+- Format: depth `sensor_msgs/CompressedImage`, source `16UC1` millimeters.
+- RVL is preferred for lossless 16UC1 depth. For aligned 640x480 dense depth,
+  expect about 50-70 KB. Native 424x240 may be smaller if bandwidth forces
+  realignment on EDGE.
+- PNG is the fallback: lossless but slower and often larger.
+- Raw depth and PointCloud2 never cross Wi-Fi.
+- RGB/depth frames are synchronized and carry the same stamp; the edge matches
+  them by stamp using the same tolerance family as `target_pixel_to_goal`.
 
-### 2.2 Depth keyframe — RVL (предпочтительно) или PNG для 16UC1, 424x240
+### 2.3 Intrinsics Once per Session
 
-- **Формат:** `sensor_msgs/CompressedImage` депт-варианта. Источник — aligned-to-color `424x240`, `16UC1` (миллиметры).
-- **RVL (Run-length + Variable-length, алгоритм Wilson, как в `compressed_depth_image_transport`):** специально для 16UC1; **O(W·H)** энкод/декод, ~**0.5–1.5 мс** на Pi 5 для 424x240, размер **~8–18 КБ** в зависимости от сцены. Это предпочтительный путь: быстрее PNG и без потерь.
-- **PNG (zlib) как fallback:** O(W·H) с большей константой (zlib deflate), на Pi 5 ~**3–6 мс**, размер **~12–25 КБ**. Используется, если RVL недоступен в транспортной цепочке.
-- **Почему не сырой depth и не PointCloud2:** сырой 424x240·2 B = 203 520 B на кадр; PointCloud2 — сотни КБ–МБ. **Через Wi-Fi не передаём принципиально.** RVL/PNG даёт сжатие ~10–20x без потерь.
-- **Согласование RGB/depth:** keyframe RGB и depth берутся из одного синхронизированного кадра (`enable_sync=true`), оба несут одинаковый `stamp`. На EDGE детектор сопоставляет их по stamp; локальный аналог допуска — `depth_match_tolerance=0.35 c` (как в `target_pixel_to_goal.py`).
+`CameraInfo` is sent once at detection-session start or when the profile changes.
+On the Pi, 3D reconstruction uses the same pinhole model:
+`x=(u-cx)*d/fx`, `y=(v-cy)*d/fy`, `z=d`. The planner and detector never return
+navigation coordinates, only image-space detections and optional depth.
 
-### 2.3 Intrinsics — один раз за сессию
+### 2.4 CDR vs Compression, Event-Driven vs Stream
 
-- `CameraInfo` (fx=`k[0]`, fy=`k[4]`, cx=`k[2]`, cy=`k[5]`) передаётся **однократно** при старте сессии детекции (или при смене профиля), а не с каждым keyframe. Это экономит ~0.5 КБ на каждую детекцию и совпадает с локальной логикой (`camera_info_callback` фиксирует интринсики один раз).
-- На Pi восстановление 3D из пикселя делает **локальный** `target_pixel_to_goal` по той же модели pinhole: `x=(u−cx)·d/fx`, `y=(v−cy)·d/fy`, `z=d`. Планировщик и детектор **никогда не возвращают навигационные координаты** — только пиксель u,v (+ опц. depth).
+- Small control/status messages use CDR without compression.
+- Only heavy L4 keyframes are compressed.
+- Everything crossing the link is event-driven or low-rate. There are no
+  continuous high-rate Wi-Fi streams.
+- Anti-stale checks are mandatory: L5 carries `stamp` + `req_id`; Approach checks
+  pixel age and detector-stream staleness at success time. L6 drops stale
+  correction stamps and gates covariance/jumps.
 
-### 2.4 Почему CDR против compressed, и event-driven против stream
+## 3. Bandwidth and Latency Budget
 
-- Управляющие/служебные сообщения (L1–L3, L5, L6, H1–H3, L7, L8) — **CDR без сжатия**: они малы (сотни байт–единицы КБ), сжатие добавило бы CPU-латентность без выигрыша.
-- Только тяжёлые keyframes (L4) сжимаются (JPEG/RVL).
-- **Всё, что идёт через линк, — событийное или низкочастотное.** Нет ни одного непрерывного высокочастотного потока через Wi-Fi. Это и есть гарантия, что реактивный контур не упирается в линк.
-- **Anti-stale на приёме (FMEA must-fix):** L5 несёт `stamp` + `req_id`; `approach`-skill сверяет возраст пикселя (порог по аналогии с `max_target_pixel_age_s=1.5 c`) и **детектирует staleness потока детектора**. Запрещено авто-объявление `reached` по устаревшему пикселю (никаких `goal_locked`+SUCCEEDED как авто-успех). L6 в `map_odom_relay` отбрасывает кадры с устаревшим `stamp` и гейтит по ковариации/скачку.
+| State | Channels | Estimate |
+|---|---|---|
+| Idle | H1+H2+H3, L6 correction, L8 diagnostics, optional L1 feedback | ~3-6 KB/s, about 30-50 kbit/s |
+| One DETECT peak | L4 + L5 over idle | ~75-115 KB burst |
+| One PLAN peak | L2 + L3 + optional L7 | ~3-16 KB burst |
+| Combined peak | detection + replan | ~80-130 KB burst |
 
----
+The reactive loop is local on the Pi:
 
-## 3. Сводный бюджет полосы и задержек
-
-### 3.1 Полоса
-
-| Состояние | Каналы | Оценка полосы |
-|-----------|--------|----------------|
-| **Idle (без детекций/планов)** | H1+H2+H3 (~6·(60..150) B/с) + L6 correction (1–2 Гц·~450 B) + L8 diag (1 Гц·~2 КБ) + опц. L1 feedback | **~3–6 КБ/с (≈ 30–50 кбит/с)** |
-| **Пик на одну DETECT-итерацию** | L4 (RGB ~35 КБ + depth ~15 КБ) + L5 (~0.2 КБ) поверх idle | **~50–70 КБ всплеском** (за ~30–90 мс на линке) |
-| **Пик на один PLAN-цикл** | L2 (~2–8 КБ) + L3 (~0.5–4 КБ) + опц. L7 (~0.5–4 КБ) | **~3–16 КБ всплеском** |
-| **Совмещённый пик** (детекция + replan одновременно) | L4+L5+L2+L3 | **~55–85 КБ всплеском**, мгновенная полоса << Wi-Fi capacity (десятки Мбит/с) |
-
-Вывод: средняя нагрузка на линк в idle — десятки кбит/с; даже пиковые всплески (десятки КБ) на порядки ниже пропускной способности Wi-Fi и не конкурируют с реактивным трафиком (которого на линке нет — он локален).
-
-### 3.2 Цепочка задержек, доказывающая, что реактивный контур не ждёт линк
-
-Реактивный контур целиком **локален на Pi** и работает на своих частотах независимо от линка:
-
+```text
+RealSense -> depthimage_to_laserscan -> /scan (local)
+EKF odom->base_link @20Hz
+map_odom_relay rebroadcasts map->odom locally
+Nav2 local costmap -> DWB controller @8-10Hz
+cmd_vel -> watchdog + Collision Monitor + CiA-402 quick-stop -> EPOS4 RT write()
 ```
-RealSense -> depthimage_to_laserscan -> /scan (local) ──┐
-EKF odom->base_link @20Hz ──────────────────────────────┤
-map_odom_relay: ребродкаст map->odom @ локально < 0.2s ──┼─> Nav2 local costmap (odom frame)
-                                                          │   -> DWB controller @8-10Hz
-                                                          │   -> cmd_vel -> safety (watchdog +
-                                                          │      Collision Monitor + CiA-402 quick-stop)
-                                                          └─> EPOS4 RT write()
-```
 
-- **Локальный цикл управления:** controller 8–10 Гц (период 100–125 мс), EKF 20 Гц (50 мс), все TF — на Pi. Ни один шаг не пересекает Wi-Fi.
-- **L6 (SLAM correction)** приходит 1–2 Гц, но Nav2 НЕ ждёт его: `map_odom_relay` держит last-good и ребродкастит map->odom локально внутри `transform_tolerance=0.2 c`. Если поправка опоздала/потерялась — relay продолжает ребродкаст последней валидной (контур не блокируется).
-- **L4/L5 (детекция):** линк 30–90 мс + GPU-инференс. Это **событийный** запрос; пока он считается, executive держит committed subgoal и продолжает продуктивное действие (explore). Пиксель приходит асинхронно и лишь обновляет цель — Nav2 продолжает ехать к текущей.
-- **L2/L3 (VLM план):** секунды. **Вне реактивного пути по построению.** Зарезервирован lead-time/интервал: FLAT исполняет текущий subtask, пока считается следующий replan (anytime/async, адопция в commit-point — AESOP consensus-horizon).
-- **chrony-бюджет (FMEA must-fix):** оффсет часов держим **существенно меньше** самых узких окон: TF `transform_tolerance` 0.2 c, depth-match 0.35 c, pixel-age 1.5 c. Целевой оффсет chrony единицы мс (<< 0.2 c), чтобы сверки stamp на приёме были корректны.
+The slowest link path is VLM planning in seconds, but it is never on the path
+from sensor to `cmd_vel`.
 
-Итог латентной цепочки: **самый медленный участок линка (VLM, секунды) никогда не находится на пути от датчика к cmd_vel.** Реактивный контур имеет верхнюю границу задержки ~один период контроллера (≤125 мс) + EKF (50 мс), полностью локально.
+## 4. Data That Stays Local on the Pi
 
----
+These streams are produced and consumed only on the Pi and must not cross Wi-Fi:
 
-## 4. Данные, остающиеся ЛОКАЛЬНО на Pi (НЕ пересекают Wi-Fi)
+| Data | Topic/interface | Rate | Why local |
+|---|---|---|---|
+| `/scan` | `sensor_msgs/LaserScan` | ~15 Hz | obstacle source for local costmap; generated locally from depth |
+| Full TF tree | `/tf`, `/tf_static` | 20-50 Hz | high-rate and reactive-critical |
+| `cmd_vel` | `/cmd_vel`, `/diff_cont/cmd_vel_unstamped` | 8-10+ Hz | safety-critical drive command |
+| EKF | odometry topics, `odom->base_link` | 20 Hz | real-time pose estimate |
+| control | ros2_control, EPOS4 CiA-402 SocketCAN | RT cycle | hard real-time and quick-stop path |
+| RealSense raw streams | color/depth/IMU | camera rate | only compressed event keyframes are exported |
 
-Эти потоки порождаются и потребляются только на Pi; передача их через Wi-Fi **запрещена** (объём и/или частота недопустимы, либо они критичны для реактивного контура):
+Also local: local costmap, frontier extraction, all skill action servers,
+`target_pixel_to_goal`, twist_mux, Collision Monitor, and `cmd_vel` watchdog.
 
-| Данные | Топик/интерфейс | Частота | Почему локально |
-|--------|------------------|---------|------------------|
-| **/scan** | `/scan` (`sensor_msgs/LaserScan`) | ~15 Гц (из `depthimage_to_laserscan`) | obstacle source для local costmap; генерируется локально из depth — **не передаём depth-поток на EDGE ради /scan** |
-| **Полное дерево TF** | `/tf`, `/tf_static` | 20–50 Гц | высокочастотный поток; реактивно критичен; только итоговая map->odom-поправка идёт через L6, и то как редкое PoseWithCovariance, НЕ как TF |
-| **cmd_vel** | `/cmd_vel`, `/diff_cont/cmd_vel_unstamped` | 8–10+ Гц | команда привода; safety-критична; должна быть детерминированно локальной |
-| **EKF** | `/diff_cont/odom`, `/odometry/filtered`, `odom->base_link` | 20 Гц | оценка позы реального времени; основа всего контура |
-| **control** | ros2_control `diff_cont`, EmbodiedRobotSystem RT write(), EPOS4 CiA-402 SocketCAN | RT-цикл | жёсткий real-time; включая **реальный quick-stop (controlword 0x6040) на RT-пути без блокирующего 50 мс SDO**, per-cycle fault poll, обработку CAN bus-off |
-| **RealSense raw streams** | `/camera/camera/color/image_raw`, `/.../aligned_depth_to_color/image_raw`, `/camera/camera/imu` | 15 Гц color/depth, IMU выше | сырые кадры/IMU; **только сжатый keyframe** уходит в L4 по событию; сырые потоки и **PointCloud2 — никогда** |
+## 5. Budget Summary
 
-Дополнительно локально: local costmap, извлечение frontiers (executive делает это **локально из costmap**, наружу уходит лишь компактный список кандидатов в L2), все skill-action-серверы (ExploreFrontier / GoToPose / ApproachDetection / GetObservation / Stop), `target_pixel_to_goal` (пиксель + локальный aligned-depth -> 3D goal), twist_mux, Collision Monitor, cmd_vel watchdog.
+- RGB 640x480 JPEG q80: about **25-45 KB**, encode on Pi 5 about 3-6 ms.
+- Aligned 640x480 16UC1 RVL depth: about **50-70 KB**.
+- `DetectTarget` request: about **75-115 KB** per keyframe; result about
+  **120-250 B**.
+- map->odom correction: about **350-500 B** at 1-2 Hz.
+- Heartbeats: about **60-150 B** each at 1-2 Hz.
+- plan-request: about **2-8 KB**; plan-decision: about **0.5-4 KB**; notes digest:
+  about **0.5-4 KB**.
+- Idle cross-link: about **3-6 KB/s**. DETECT peak: about **75-115 KB**. PLAN
+  peak: about **3-16 KB**.
+- Local reactive latency budget: roughly one controller period plus EKF, and
+  independent from the link.
 
----
+Relevant files used for these contracts:
 
-## 5. Ключевые числа (резюме для проверки бюджета)
+- `ar_project/scripts/target_pixel_to_goal.py`
+- `ar_project/launch/realsense_rgbd_pi.launch.py`
+- `ar_project/config/ekf_gyro.yaml`
+- `object_tracking/object_tracking/tracker_node.py`
 
-- RGB 640x480 JPEG q80 ≈ **25–45 КБ** (encode на Pi 5 ~3–6 мс, O(W·H)).
-- Depth 424x240 16UC1 **RVL** ≈ **8–18 КБ** (encode ~0.5–1.5 мс) / **PNG** ≈ 12–25 КБ (~3–6 мс).
-- DetectTarget request (L4) суммарно ≈ **35–70 КБ** на keyframe; result (L5) ≈ **120–250 B**.
-- map->odom correction (L6) ≈ **350–500 B** @ 1–2 Гц.
-- Heartbeats H1/H2/H3 ≈ **60–150 B** каждый @ 1–2 Гц.
-- plan-request (L2) ≈ **2–8 КБ**; plan-decision (L3) ≈ **0.5–4 КБ**; notes digest (L7) ≈ **0.5–4 КБ**.
-- **Idle cross-link:** ~3–6 КБ/с (≈30–50 кбит/с). **Пик/DETECT:** ~50–70 КБ. **Пик/PLAN:** ~3–16 КБ.
-- Латентный бюджет реактива (локально): ≤ ~175 мс (1 период контроллера + EKF), **независимо от линка**; VLM секунды — всегда вне реактивного пути.
-
----
-
-Релевантные файлы (абсолютные пути), на которых основаны контракты:
-- `C:\Users\dende\code\mobile_robot_navigation\ar_project\scripts\target_pixel_to_goal.py` — pixel->3D (pinhole), depth 16UC1 mm, `depth_match_tolerance=0.35`, `max_target_pixel_age_s=1.5`, TF timeout 0.2 c, интринсики из `k[0/4/2/5]`.
-- `C:\Users\dende\code\mobile_robot_navigation\ar_project\launch\realsense_rgbd_pi.launch.py` — профили RGB `640x480x15`, depth `424x240x15` aligned, `pointcloud.enable=false`.
-- `C:\Users\dende\code\mobile_robot_navigation\ar_project\config\ekf_gyro.yaml` — EKF 20 Гц, `transform_timeout=0.1`, odom->base_link.
-- `C:\Users\dende\code\mobile_robot_navigation\object_tracking\object_tracking\tracker_node.py` — backends (CLIP/GroundingDINO+MobileSAM/YOLOE), та же модель pixel+depth->goal на стороне perception.
-
-Кастомных `.action/.srv/.msg` в репозиториях пока нет — типы `SeekObject`, `PlanRequest`/`PlanDecision`, `DetectTarget`, `DetectionResult`, `FrontierCandidate` нужно создать в новой ветке `robust` (предлагаемые поля приведены в таблице §1).
+Custom `.action/.srv/.msg` files were not present when this architecture note was
+written. `SeekObject`, `PlanRequest`/`PlanDecision`, `DetectTarget`,
+`DetectionResult`, and `FrontierCandidate` must be created on `robust` if not
+already implemented.

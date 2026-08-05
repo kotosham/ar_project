@@ -1,18 +1,24 @@
-# RUNBOOK - запуск стека на симуляции и железе
+# RUNBOOK - Simulation and Hardware Stack Bringup
 
-Короткая рабочая инструкция для ветки `robust`. Safety-чеклист перед автономными
-прогонами: `HIL_BRINGUP_CHECKLIST.md`. Логи экспериментов: `experiment_logs/vlm_missions/`.
+Short working instructions for the `robust` branch. Safety checklist before
+autonomous runs: `HIL_BRINGUP_CHECKLIST.md`. Experiment logs:
+`experiment_logs/vlm_missions/` and `experiment_logs/flat_missions/`.
 
-## 0. Что где работает
-- **Raspberry Pi:** моторы/CAN, RealSense, `/scan`, EKF, Nav2, `map_odom_relay`, `search_coordinator`.
-- **Edge-ноутбук:** camera relay `/camera_edge/*`, RTAB-Map SLAM, dashboard/logger, detector, VLM-orchestrator.
-- **FLAT:** миссией управляет executive на Pi, VLM не нужен.
-- **VLM:** цель передается executive, затем executive делает handoff в `planner_orchestrator`.
-- **Detector нужен обоим режимам:** FLAT тоже использует `detect_target_server` для DETECT/APPROACH.
+## 0. What Runs Where
 
-## 1. Подготовка и сборка
+- **Raspberry Pi:** motors/CAN, RealSense, `/scan`, EKF, Nav2, `map_odom_relay`,
+  `search_coordinator`.
+- **Edge laptop:** camera relay `/camera_edge/*`, RTAB-Map SLAM, dashboard/logger,
+  detector, VLM orchestrator.
+- **FLAT:** mission is controlled by the Pi executive; VLM is not required.
+- **VLM:** the target is sent to the executive, then the executive hands off to
+  `planner_orchestrator`.
+- **The detector is required in both modes:** FLAT also uses `detect_target_server`
+  or the continuous tracker for DETECT/APPROACH.
 
-Один раз на машине:
+## 1. Setup and Build
+
+One-time machine setup:
 
 ```bash
 source /opt/ros/jazzy/setup.bash
@@ -21,7 +27,7 @@ colcon build --symlink-install
 source ~/ros2_ws/install/setup.bash
 ```
 
-Venv детектора на edge:
+Detector venv on edge:
 
 ```bash
 python3 -m venv --system-site-packages ~/.venvs/ros-jazzy-ml
@@ -30,17 +36,17 @@ pip install torch torchvision --index-url https://download.pytorch.org/whl/cu124
 pip install -r ~/ros2_ws/src/object_tracking/requirements.txt
 ```
 
-VLM credentials, только для VLM-режима:
+VLM credentials, only for VLM mode:
 
 ```bash
 cp ~/ros2_ws/src/object_tracking/planner_orchestrator/vlm.env.example \
    ~/ros2_ws/src/object_tracking/planner_orchestrator/vlm.env
-# заполнить VLM_BASE_URL / VLM_API_KEY / VLM_MODEL
+# Fill VLM_BASE_URL / VLM_API_KEY / VLM_MODEL.
 ```
 
-## 2. Быстрый запуск на железе
+## 2. Fast Hardware Bringup
 
-В каждом терминале на **Pi** сначала:
+Run this first in every terminal on **Pi**:
 
 ```bash
 cd ~/ros2_ws
@@ -51,7 +57,7 @@ export ROS_DISABLE_ROS2CLI_DAEMON=1
 source ~/ros2_ws/src/ar_project/deploy/transport/transport_env.sh
 ```
 
-В каждом терминале на **edge-ноутбуке** сначала:
+Run this first in every terminal on the **edge laptop**:
 
 ```bash
 cd ~/ros2_ws
@@ -70,7 +76,7 @@ source ~/ros2_ws/src/ar_project/deploy/transport/transport_env.sh
 ros2 launch ar_project hardware_bringup.launch.py
 ```
 
-Если нужно включить collision monitor:
+Enable Collision Monitor if needed:
 
 ```bash
 ros2 launch ar_project hardware_bringup.launch.py use_collision_monitor:=true
@@ -115,14 +121,15 @@ ros2 run search_coordinator coordinator_node --ros-args \
   -p flat_initial_scan_view_detect_wait_s:=4.0
 ```
 
-В FLAT, если цель не найдена в стартовом кадре, coordinator делает фиксированный
-несемантический обзор `forward -> right -> left`, затем переходит к `ExploreFrontier`.
+In FLAT, if the target is not found in the starting frame, the coordinator runs a
+fixed non-semantic overview `forward -> right -> left`, then switches to
+`ExploreFrontier`.
 
-### Edge-ноутбук
+### Edge Laptop
 
 **Edge T1 - camera relay + RTAB-Map + frontiers + dashboard/logger**
 
-Для FLAT-экспериментов:
+For FLAT experiments:
 
 ```bash
 ros2 launch ar_project edge_bringup.launch.py \
@@ -130,7 +137,7 @@ ros2 launch ar_project edge_bringup.launch.py \
   start_vlm_logger:=false
 ```
 
-Для VLM-экспериментов:
+For VLM experiments:
 
 ```bash
 ros2 launch ar_project edge_bringup.launch.py \
@@ -138,7 +145,7 @@ ros2 launch ar_project edge_bringup.launch.py \
   start_flat_logger:=false
 ```
 
-Быстрая проверка frontier-режима:
+Quick frontier check:
 
 ```bash
 ros2 node list | grep -E 'frontier_extractor|rtabmap'
@@ -146,14 +153,14 @@ ros2 topic info /frontiers -v
 timeout 8 ros2 topic echo /frontiers --once
 ```
 
-Важно: `/frontiers` в `topic list` сам по себе ничего не доказывает. Topic может
-появиться только из-за подписчика `search_coordinator`; нужен publisher от
+`/frontiers` in `topic list` is not proof by itself. The topic can appear only
+because `search_coordinator` subscribes to it; there must be a publisher from
 `/frontier_extractor`.
 
 **Edge T2-FLAT - continuous detector (`/target_pixel`)**
 
-FLAT-режим ждет поток `/target_pixel`, поэтому здесь нужен continuous tracker,
-а не action-сервер VLM.
+FLAT expects a `/target_pixel` stream, so it uses the continuous tracker rather
+than the VLM action detector.
 
 ```bash
 ros2 launch object_tracking sam_node.launch.py \
@@ -165,14 +172,14 @@ ros2 launch object_tracking sam_node.launch.py \
   depth_topic:=/camera_edge/aligned_depth_to_color/image_raw
 ```
 
-Быстрая проверка после отправки FLAT-миссии:
+After sending a FLAT mission:
 
 ```bash
 ros2 topic info /target_pixel -v
 timeout 8 ros2 topic echo /target_pixel --once
 ```
 
-У `/target_pixel` должен быть publisher `rgb_tracker_node`.
+`/target_pixel` should have `rgb_tracker_node` as publisher.
 
 **Edge T2-VLM - action detector / Set-of-Mark**
 
@@ -184,10 +191,10 @@ timeout 8 ros2 topic echo /target_pixel --once
   -p target_conf_default:=0.60
 ```
 
-Defaults уже зашиты: `model_mode=dino`, `depth_point_strategy=nearest_mask`,
+Defaults are already encoded: `model_mode=dino`, `depth_point_strategy=nearest_mask`,
 `use_compressed_input=false`.
 
-**Edge T3 - VLM-orchestrator, только для VLM**
+**Edge T3 - VLM orchestrator, VLM only**
 
 ```bash
 set -a
@@ -205,7 +212,7 @@ ros2 launch ar_project rviz_launch.py \
   config:=$(ros2 pkg prefix ar_project)/share/ar_project/config/rtabmap_rgbd.rviz
 ```
 
-**Edge T5 - отправка миссии**
+**Edge T5 - send mission**
 
 ```bash
 # FLAT
@@ -217,7 +224,7 @@ ros2 run fleet_comms send_mission "chair" true
 
 Dashboard: `http://localhost:8088`.
 
-## 3. Быстрая проверка перед миссией
+## 3. Pre-Mission Quick Check
 
 Pi:
 
@@ -238,7 +245,7 @@ timeout 8 ros2 topic hz /map_odom_correction
 ros2 action list | grep detect
 ```
 
-## 4. Быстрый запуск симуляции
+## 4. Fast Simulation Bringup
 
 VLM simulation:
 
@@ -268,7 +275,7 @@ ros2 launch ar_project flat_sim_bringup.launch.py
 ros2 run fleet_comms send_mission "bus" false
 ```
 
-Если в FLAT нет frontier-ов, засей карту коротким вращением:
+If FLAT has no frontiers, seed the map with a short rotation:
 
 ```bash
 ros2 topic pub -r 10 /diff_cont/cmd_vel_unstamped geometry_msgs/msg/Twist "{angular: {z: 0.6}}" &
@@ -281,66 +288,70 @@ kill %1
 
 ## 5. FLAT vs VLM
 
-Операторская команда одна:
+The operator command is the same:
 
 ```bash
-ros2 run fleet_comms send_mission "<цель>" <true|false>
+ros2 run fleet_comms send_mission "<target>" <true|false>
 ```
 
-- `false`: FLAT, `/seek_object allow_vlm=false`, миссией владеет executive; если цель не видна, выполняется фиксированный scan, затем `ExploreFrontier`.
-- `true`: VLM, `/seek_object allow_vlm=true`, executive публикует instruction во внутренний `/vlm_mission`; Qwen выбирает действия по кадру, карте, context marks и памяти.
-- `/vlm_mission` обычному оператору не нужен; это debug/internal topic.
-- Для VLM нужен `Edge T3`; для FLAT `Edge T3` и `vlm.env` не нужны.
+- `false`: FLAT, `/seek_object allow_vlm=false`; the executive owns the mission.
+  If the target is not visible, it performs a fixed scan and then
+  `ExploreFrontier`.
+- `true`: VLM, `/seek_object allow_vlm=true`; the executive publishes the
+  instruction to internal `/vlm_mission`, and Qwen chooses actions from camera,
+  map, context marks, and memory.
+- `/vlm_mission` is a debug/internal topic; normal operators do not need it.
+- VLM requires `Edge T3`; FLAT does not require `Edge T3` or `vlm.env`.
 
-## 6. Как работает VLM-режим
+## 6. VLM Mode Behavior
 
-На каждом шаге orchestrator отправляет в Qwen:
+At each step, the orchestrator sends Qwen:
 
 - target/instruction;
-- `visible_marks`: строгие кандидаты цели, к ним можно делать `DRIVE_TO_VISIBLE`;
-- `context_marks`: офисные объекты-подсказки, они не являются целями для подъезда;
-- Set-of-Mark кадр с камеры;
-- top-down SLAM map `/map` с позой робота;
-- notes/memory: corridor scans, прошлые действия, причины отказов Nav2.
+- `visible_marks`: strict target candidates eligible for `DRIVE_TO_VISIBLE`;
+- `context_marks`: office-object cues, not destinations;
+- Set-of-Mark camera frame;
+- top-down SLAM map `/map` with robot pose;
+- notes/memory: corridor scans, previous actions, Nav2 failure reasons.
 
-Действия VLM:
+VLM actions:
 
-- `TURN`;
-- `DRIVE_FORWARD`;
-- `DRIVE_TO_VISIBLE`;
-- `DETECT_ALL`, сейчас это refresh фиксированного DINO context-словаря;
-- `DONE`.
+- `TURN`
+- `DRIVE_FORWARD`
+- `DRIVE_TO_VISIBLE`
+- `DETECT_ALL`, currently a refresh of the fixed DINO context vocabulary
+- `DONE`
 
-Главное правило текущей логики: если цель не видна, робот исследует свободные
-коридоры на карте; context-объекты помогают выбрать коридор, но не становятся
-точками притяжения. Если цель уверенно найдена, orchestrator сохраняет ее map-точку
-и продолжает подход к ней даже при временной потере объекта из кадра.
+Current rule: if the target is not visible, the robot explores free corridors on
+the map. Context objects help choose between corridors but are not attraction
+points. If a target is confidently found, the orchestrator stores its map point
+and continues approach even if the object is temporarily lost from the frame.
 
-## 7. Важные параметры
+## 7. Important Parameters
 
-| Параметр | Деф. | Смысл |
+| Parameter | Default | Meaning |
 |---|---:|---|
-| `target_conf_default` | `0.60` | Порог целевой DINO-детекции; одинаковый для VLM action detector и FLAT continuous tracker |
-| `target_detect_conf` | `0.60` | Порог цели в orchestrator |
-| `context_detect_conf` | `0.30` | Порог DINO context-объектов |
-| `async_replan` | `false` | Дискретно: ехать -> стоп -> наблюдать -> думать |
-| `turn_settle_s` | `2.0` | Пауза после TURN перед анализом кадра |
-| `min_effective_turn_rad` | `0.60` | Малые TURN нормализуются, потому что Nav2 может засчитать их без движения |
-| `initial_scan_when_target_absent` | `true` | Если цели нет, обзор: forward -> right -> left |
-| `flat_initial_scan_enabled` | `true` | FLAT baseline тоже делает фиксированный обзор, но без VLM-выбора |
-| `flat_initial_scan_forward_wait_s` | `4.0` | Сколько ждать стартовую target-детекцию перед FLAT-scan |
-| `flat_initial_scan_settle_s` | `2.0` | Пауза после FLAT scan-TURN перед проверкой детекции |
-| `flat_initial_scan_view_detect_wait_s` | `4.0` | Окно ожидания свежей target-детекции после стабилизации FLAT scan-ракурса |
-| `continuous_inference_rate` | `0.5` | Частота DINO/SAM в FLAT continuous tracker; ниже, чтобы не душить RGB-D/RTAB-Map |
-| `continuous_header_max_age` | `3.5` | Не публиковать `/target_pixel`, если RGB `header.stamp` уже старый |
-| `approach_max_goal_step_m` | `1.2` | Bounded-step к далекой/плохо раскрытой цели |
-| `approach_direct_clearance_m` | `0.55` | Радиус known-free вокруг direct standoff-точки |
-| `approach_allow_unknown_bounded_goal` | `true` | Разрешить короткий cautious probe через unknown |
-| `locked_target_approach_max_attempts` | `8` | Не забывать подтвержденную цель после потери кадра |
-| `vlm_timeout_s` | `30.0` | Таймаут ответа VLM |
-| `send_map` | `true` | Отправлять карту вторым изображением |
+| `target_conf_default` | `0.60` | Target DINO threshold; shared by VLM action detector and FLAT continuous tracker |
+| `target_detect_conf` | `0.60` | Target threshold in orchestrator |
+| `context_detect_conf` | `0.30` | DINO context-object threshold |
+| `async_replan` | `false` | Discrete loop: drive -> stop -> observe -> think |
+| `turn_settle_s` | `2.0` | Pause after TURN before image analysis |
+| `min_effective_turn_rad` | `0.60` | Small TURNs are normalized because Nav2 may accept them without motion |
+| `initial_scan_when_target_absent` | `true` | If no target, overview: forward -> right -> left |
+| `flat_initial_scan_enabled` | `true` | FLAT baseline also scans, but without semantic VLM choice |
+| `flat_initial_scan_forward_wait_s` | `4.0` | Wait for initial target detection before FLAT scan |
+| `flat_initial_scan_settle_s` | `2.0` | Pause after FLAT scan TURN before detection |
+| `flat_initial_scan_view_detect_wait_s` | `4.0` | Wait window for fresh target after each stable scan view |
+| `continuous_inference_rate` | `0.5` | DINO/SAM rate in FLAT tracker, kept low to avoid starving RGB-D/RTAB-Map |
+| `continuous_header_max_age` | `3.5` | Do not publish `/target_pixel` if RGB header stamp is already old |
+| `approach_max_goal_step_m` | `1.2` | Bounded step toward distant/poorly mapped target |
+| `approach_direct_clearance_m` | `0.55` | Known-free radius around direct standoff point |
+| `approach_allow_unknown_bounded_goal` | `true` | Allow short cautious probe through unknown space |
+| `locked_target_approach_max_attempts` | `8` | Keep a confirmed target after temporary visual loss |
+| `vlm_timeout_s` | `30.0` | VLM response timeout |
+| `send_map` | `true` | Send map as second image |
 
-## 8. Мониторинг и логи
+## 8. Monitoring and Logs
 
 Dashboard:
 
@@ -360,8 +371,8 @@ ros2 node list
 ros2 action list
 ```
 
-Persistent mission logs пишутся автоматически из `edge_bringup.launch.py`.
-Для осмысленных имён файлов добавляй `flat_log_run_id:=flat_scene_1` или
+Persistent mission logs are started automatically from `edge_bringup.launch.py`.
+For meaningful file names, set `flat_log_run_id:=flat_scene_1` or
 `vlm_log_run_id:=vlm_scene_1`.
 
 ```text
@@ -371,13 +382,13 @@ Persistent mission logs пишутся автоматически из `edge_bri
 ~/ros2_ws/experiment_logs/vlm_missions/<run_id>.csv
 ```
 
-Timing поля: VLM CSV пишет `latency_ms` и `time_to_first_action_s`; FLAT CSV
-пишет `detector_runtime_mean_s`, `time_to_detect_s` и `time_to_approach_s`.
-Для сравнения latency между режимами используй VLM `latency_ms` и FLAT
-`detector_runtime_mean_s`; `time_to_detect_s` / `time_to_approach_s` включают
-повороты, стабилизацию кадра и ожидание depth-точки.
+Timing fields: VLM CSV stores `latency_ms` and `time_to_first_action_s`; FLAT CSV
+stores `detector_runtime_mean_s`, `time_to_detect_s`, and `time_to_approach_s`.
+For latency comparison between modes, use VLM `latency_ms` and FLAT
+`detector_runtime_mean_s`. `time_to_detect_s` / `time_to_approach_s` include
+turns, frame settling, and waiting for a depth point.
 
-Ручные loggers:
+Manual loggers:
 
 ```bash
 ros2 run fleet_comms flat_mission_logger --ros-args \
@@ -389,21 +400,30 @@ ros2 run fleet_comms vlm_mission_logger --ros-args \
   -p run_id:=vlm_scene_1
 ```
 
-## 9. Ожидаемая деградация
+## 9. Expected Degradation
 
-Если VLM недоступна или таймаутит, orchestrator открывает circuit-breaker и
-переходит в DEGRADED/FLAT fallback. Миссия не должна аварийно останавливаться.
-При потере edge/Wi-Fi executive на Pi сохраняет автономность.
+If the VLM is unavailable or times out, the orchestrator opens the circuit
+breaker and switches to DEGRADED/FLAT fallback. The mission should not stop
+abruptly. If edge/Wi-Fi is lost, the Pi executive remains autonomous.
 
-## 10. Частые проблемы
+## 10. Common Issues
 
-- **Нет `/camera_edge/*`:** проверь RealSense на Pi и `edge_bringup` на edge.
-- **Detector не стартует из-за `torch`:** запускай через `/home/user/.venvs/ros-jazzy-ml/bin/python -m object_tracking.detect_target_server`.
-- **Detector есть, но нет глубины:** проверь `/camera_edge/aligned_depth_to_color/image_raw`.
-- **Nav2 node not found:** перезапусти `navigation_launch.py`, затем проверь lifecycle nodes.
-- **Робот не двигается:** проверь `/cmd_vel_out`, `/cmd_vel_collision_safe`, `/diff_cont/cmd_vel` и watchdog.
-- **Collision monitor блокирует движение:** проверь timestamp `/scan`, TF `camera_link -> base_link`, lifecycle `/collision_monitor`.
-- **VLM видит цель, но `DRIVE_TO_VISIBLE` не едет:** смотри в `search_coordinator` причину `ABORTED`: `clearance_occupied`, `clearance_unknown`, `outside_map`.
-- **Ложные target-детекции:** подними `target_conf_default`/`target_detect_conf`; context-порог не трогай первым.
-- **Карта не уходит в VLM (`map=no`):** нет `/map`, `send_map=false` или orchestrator запущен не из venv с cv2/numpy.
-- **Gazebo падает SIGSEGV:** только симуляция, перед запуском `export GZ_IP=127.0.0.1`.
+- **No `/camera_edge/*`:** check RealSense on Pi and `edge_bringup` on edge.
+- **Detector fails because of `torch`:** run it through
+  `/home/user/.venvs/ros-jazzy-ml/bin/python -m object_tracking.detect_target_server`.
+- **Detector runs but depth is missing:** check
+  `/camera_edge/aligned_depth_to_color/image_raw`.
+- **Nav2 node not found:** restart `navigation_launch.py`, then check lifecycle
+  nodes.
+- **Robot does not move:** check `/cmd_vel_out`, `/cmd_vel_collision_safe`,
+  `/diff_cont/cmd_vel`, and watchdog.
+- **Collision Monitor blocks motion:** check `/scan` timestamp,
+  `camera_link -> base_link` TF, and `/collision_monitor` lifecycle.
+- **VLM sees target but `DRIVE_TO_VISIBLE` does not move:** inspect
+  `search_coordinator` for `ABORTED` reasons: `clearance_occupied`,
+  `clearance_unknown`, `outside_map`.
+- **False target detections:** raise `target_conf_default`/`target_detect_conf`;
+  do not tune context threshold first.
+- **Map missing in VLM (`map=no`):** `/map` missing, `send_map=false`, or
+  orchestrator not launched from the venv with cv2/numpy.
+- **Gazebo SIGSEGV:** simulation only; before launch, run `export GZ_IP=127.0.0.1`.

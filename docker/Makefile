@@ -1,8 +1,8 @@
-# Обёртка над docker compose. Запускать из ar_project/docker/.
-#   make build   # собрать все образы
-#   make sim     # поднять FLAT в симуляции
-#   make edge    # поднять детектор + оркестратор (GPU)
-#   make down    # остановить и удалить контейнеры
+# Thin wrapper around docker compose. Run from ar_project/docker/.
+#   make build   # build all images
+#   make sim     # start FLAT simulation
+#   make edge    # start detector + orchestrator (GPU)
+#   make down    # stop and remove containers
 COMPOSE = docker compose -f docker-compose.yml
 
 .PHONY: build sim edge all down logs ps
